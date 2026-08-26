@@ -724,31 +724,20 @@ void PluginManager::ReportPluginErrors()
 		}
 	}
 
-	message += "\n\nContinuing to load may result in lost save data or other undesired behavior.";
-	message += "\nExit game? (yes highly suggested)";
-
-	int result = MessageBox(0, message.c_str(), "SKSE Plugin Loader (" __PREPRO_TOKEN_STR__(SKSE_VERSION_INTEGER) "."
-		__PREPRO_TOKEN_STR__(SKSE_VERSION_INTEGER_MINOR) "."
-		__PREPRO_TOKEN_STR__(SKSE_VERSION_INTEGER_BETA) ")",
-		MB_YESNO);
-
-	if(result == IDYES)
-	{
-		TerminateProcess(GetCurrentProcess(), 0);
-	}
+	// headless doctrine: report to skse64.log only - a modal box blocks
+	// unattended launch chains, and dismissing it can kill the process.
+	// The refused plugins are already individually logged with reasons;
+	// this is the summary line.
+	_ERROR("PLUGIN LOAD ERRORS (%d plugin(s) disabled, see lines above):\n%s",
+		(int)m_erroredPlugins.size(), message.c_str());
 }
 
 void PluginManager::UpdateAddressLibraryPrompt()
 {
-	int result = MessageBox(0,
-		"DLL plugins you have installed require a new version of the Address Library. Either this is a new install, or Skyrim was just updated. Visit the Address Library webpage for updates?",
-		"SKSE Plugin Loader", MB_YESNO);
-
-	if(result == IDYES)
-	{
-		ShellExecute(0, nullptr, "https://www.nexusmods.com/skyrimspecialedition/mods/32444", nullptr, nullptr, 0);
-		TerminateProcess(GetCurrentProcess(), 0);
-	}
+	// headless doctrine: log-only, never prompt/browse/terminate
+	_ERROR("DLL plugins you have installed require a new version of the Address Library "
+		"(https://www.nexusmods.com/skyrimspecialedition/mods/32444). "
+		"Either this is a new install, or Skyrim was just updated.");
 }
 
 void PluginManager::CallPostLoad()

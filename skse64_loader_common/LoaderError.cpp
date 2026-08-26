@@ -15,5 +15,7 @@ void PrintLoaderError(const char * fmt, ...)
 	vsprintf_s(buf, sizeof(buf), fmt, args);
 	va_end(args);
 
-	MessageBox(NULL, buf, "SKSE64 Loader", MB_OK | MB_ICONEXCLAMATION);
+	// headless doctrine: errors are already in skse64_loader.log via gLog above;
+	// a modal box blocks unattended launch chains, so never show one
+	(void)buf;
 }
