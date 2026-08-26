@@ -10,7 +10,9 @@
 #include "GameMenus.h"
 
 // Helpers
-double round(double r)
+// static: a global non-static round() collides with the UCRT's round at link
+// time when these objects are linked into a plugin alongside libucrt
+static double round(double r)
 {
 	return (r >= 0.0) ? floor(r + 0.5) : ceil(r - 0.5);
 }
