@@ -2,9 +2,12 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
-  <PropertyGroup />
+  <PropertyGroup>
+    <!-- Builds are side-effect free unless deployment is explicitly enabled. -->
+    <SkseDeployOnBuild Condition="'$(SkseDeployOnBuild)' == ''">false</SkseDeployOnBuild>
+  </PropertyGroup>
   <ItemDefinitionGroup>
-    <PostBuildEvent>
+    <PostBuildEvent Condition="'$(SkseDeployOnBuild)' == 'true' and '$(Skyrim64Path)' != ''">
       <Command>copy "$(TargetPath)" "$(Skyrim64Path)\$(TargetFileName)" /Y</Command>
       <Message>Installing DLL...</Message>
     </PostBuildEvent>

@@ -17,6 +17,101 @@ PluginHandle					PluginManager::s_dispatchingPluginHandle = 0;
 PluginManager::PluginListeners	PluginManager::s_pluginListeners;
 UInt32							s_trampolineLog = 1;
 
+namespace
+{
+	bool IsAutomationSilentUIEnabled()
+	{
+		char value[8] = {};
+		const DWORD length = GetEnvironmentVariableA("SKSE_AUTOMATION_SILENT_UI", value, sizeof(value));
+		return length == 1 && value[0] == '1';
+	}
+
+	int SafeMessageBoxResult(UINT type)
+	{
+		switch(type & MB_TYPEMASK)
+		{
+		case MB_ABORTRETRYIGNORE:
+			return IDIGNORE;
+		case MB_CANCELTRYCONTINUE:
+			return IDCANCEL;
+		case MB_OKCANCEL:
+		case MB_RETRYCANCEL:
+		case MB_YESNOCANCEL:
+			return IDCANCEL;
+		case MB_YESNO:
+			return IDNO;
+		default:
+			return IDOK;
+		}
+	}
+
+	int WINAPI SilentPluginMessageBoxA(HWND, LPCSTR text, LPCSTR caption, UINT type)
+	{
+		_ERROR("SUPPRESSED PLUGIN UI [%s]: %s",
+			caption ? caption : "no caption",
+			text ? text : "no message");
+		return SafeMessageBoxResult(type);
+	}
+
+	std::string WideToUtf8(LPCWSTR value)
+	{
+		if(!value)
+			return std::string();
+
+		const int length = WideCharToMultiByte(CP_UTF8, 0, value, -1, NULL, 0, NULL, NULL);
+		if(length <= 1)
+			return std::string();
+
+		std::vector<char> utf8(length);
+		if(!WideCharToMultiByte(CP_UTF8, 0, value, -1, utf8.data(), length, NULL, NULL))
+			return std::string();
+
+		return std::string(utf8.data());
+	}
+
+	int WINAPI SilentPluginMessageBoxW(HWND, LPCWSTR text, LPCWSTR caption, UINT type)
+	{
+		const std::string captionUtf8 = WideToUtf8(caption);
+		const std::string textUtf8 = WideToUtf8(text);
+		_ERROR("SUPPRESSED PLUGIN UI [%s]: %s",
+			captionUtf8.empty() ? "no caption" : captionUtf8.c_str(),
+			textUtf8.empty() ? "no message" : textUtf8.c_str());
+		return SafeMessageBoxResult(type);
+	}
+
+	bool ReplaceImport(void * slot, uintptr_t replacement)
+	{
+		if(!slot)
+			return false;
+
+		DWORD oldProtect = 0;
+		if(!VirtualProtect(slot, sizeof(uintptr_t), PAGE_READWRITE, &oldProtect))
+			return false;
+
+		*reinterpret_cast<uintptr_t *>(slot) = replacement;
+
+		DWORD ignored = 0;
+		VirtualProtect(slot, sizeof(uintptr_t), oldProtect, &ignored);
+		FlushInstructionCache(GetCurrentProcess(), slot, sizeof(uintptr_t));
+		return true;
+	}
+
+	void SuppressPluginModalUI(HMODULE module, const char * dllName)
+	{
+		if(!module || !IsAutomationSilentUIEnabled())
+			return;
+
+		UInt32 patched = 0;
+		patched += ReplaceImport(GetIATAddr(module, "user32.dll", "MessageBoxA"),
+			reinterpret_cast<uintptr_t>(&SilentPluginMessageBoxA)) ? 1 : 0;
+		patched += ReplaceImport(GetIATAddr(module, "user32.dll", "MessageBoxW"),
+			reinterpret_cast<uintptr_t>(&SilentPluginMessageBoxW)) ? 1 : 0;
+
+		if(patched)
+			_MESSAGE("automation silent UI: redirected %u modal import(s) for %s", patched, dllName);
+	}
+}
+
 extern EventDispatcher<SKSEModCallbackEvent>	g_modCallbackEventDispatcher;
 extern EventDispatcher<SKSECameraEvent>			g_cameraEventDispatcher;
 extern EventDispatcher<SKSECrosshairRefEvent>	g_crosshairRefEventDispatcher;
@@ -170,6 +265,8 @@ void PluginManager::InstallPlugins(UInt32 phase)
 			plugin.handle = (HMODULE)LoadLibrary(pluginPath.c_str());
 			if(!plugin.handle)
 				LogPluginLoadError(plugin, "couldn't load plugin", GetLastError());
+			else
+				SuppressPluginModalUI(plugin.handle, plugin.dllName.c_str());
 		}
 
 		bool	success = false;
