@@ -8,6 +8,11 @@
 namespace
 {
 	static const size_t kMaxNameLen  = 1024;
+	bool StackLookupProbeEnabled()
+	{
+		char flag[2] = {};
+		return GetEnvironmentVariableA("SKSE_AUTOMATION_STACK_LOOKUP_PROBE", flag, sizeof(flag)) == 1 && flag[0] == '1';
+	}
 }
 
 ///
@@ -43,6 +48,58 @@ const ISKSEObjectFactory* SKSEObjectRegistry::GetFactoryByName(const char* name)
 void SKSEPersistentObjectStorage::CleanDroppedStacks()
 {
 	VMClassRegistry* registry = (*g_skyrimVM)->GetClassRegistry();
+
+	// Explicit automation-only coverage of the active-stack lookup. An empty
+	// persistent-object table otherwise skips the path which crashed on save.
+	// Read an existing engine stack; do not create stacks or alter save payloads.
+	if (StackLookupProbeEnabled())
+	{
+		UInt32 probeId = 0;
+		void* expected = nullptr;
+		registry->stackLock.Lock();
+		UInt64 legacyValue = 0;
+		auto choose = [&](VMStackTableItem* item) {
+			if (!item->data) return true;
+			UInt32 embeddedId = 0;
+			memcpy(&embeddedId, reinterpret_cast<const char*>(item->data) + 0x80, sizeof(embeddedId));
+			if (embeddedId != item->stackId) return true;
+			probeId = item->stackId;
+			expected = item->data;
+			memcpy(&legacyValue, reinterpret_cast<const char*>(expected) + 0x18, sizeof(legacyValue));
+			return false;
+		};
+		registry->allStacks.ForEach(choose);
+		registry->stackLock.Release();
+		if (expected) {
+			_MESSAGE("STACK_LOOKUP_PROBE_BEGIN id=%u expected=%p legacy_first_value=%016llX persistent_slots=%u", probeId, expected, legacyValue, static_cast<UInt32>(data_.size()));
+			// Logging is outside the spinlock. Revalidate after that gap, then
+			// retain the recursive SimpleLock across the actual lookup and ID
+			// check. A departed/replaced stack is not successful coverage.
+			VMStackInfo* actual = nullptr;
+			UInt32 embeddedId = 0;
+			bool covered = false;
+			registry->stackLock.Lock();
+			auto* current = registry->allStacks.Find(&probeId);
+			if (current && current->data == expected) {
+				memcpy(&embeddedId, reinterpret_cast<const char*>(current->data) + 0x80, sizeof(embeddedId));
+				if (embeddedId == probeId) {
+					actual = registry->GetStackInfo(probeId);
+					// Never dereference the returned opaque pointer, especially
+					// after unlocking. Read the map-owned Stack while protected.
+					memcpy(&embeddedId, reinterpret_cast<const char*>(current->data) + 0x80, sizeof(embeddedId));
+					covered = true;
+				}
+			}
+			registry->stackLock.Release();
+			if (covered) {
+				_MESSAGE("STACK_LOOKUP_PROBE_END id=%u actual=%p expected=%p embedded_id=%u match=%u", probeId, actual, expected, embeddedId, static_cast<UInt32>(actual == expected && embeddedId == probeId));
+			} else {
+				_MESSAGE("STACK_LOOKUP_PROBE_NOT_COVERED id=%u: stack gone or replaced during logging gap", probeId);
+			}
+		} else {
+			_MESSAGE("STACK_LOOKUP_PROBE_NOT_COVERED: no verified active stack; not a passing coverage test");
+		}
+	}
 
 	for (UInt32 i=0; i<data_.size(); i++)
 	{
@@ -94,6 +151,8 @@ bool SKSEPersistentObjectStorage::Save(SKSESerializationInterface* intfc)
 		return false;
 
 	UInt32 filledSize = data_.size() - freeIndices_.size();
+	if (StackLookupProbeEnabled())
+		_MESSAGE("STACK_STORAGE_SAVE slots=%u filled=%u", dataSize, filledSize);
 	if (! WriteData(intfc, &filledSize))
 		return false;
 
@@ -152,6 +211,8 @@ bool SKSEPersistentObjectStorage::Load(SKSESerializationInterface* intfc, UInt32
 	for (UInt32 i=0; i<data_.size(); i++)
 		if (data_[i].obj == NULL)
 			freeIndices_.push_back(i);
+	if (StackLookupProbeEnabled())
+		_MESSAGE("STACK_STORAGE_LOAD slots=%u filled=%u restored=%u", dataSize, filledSize, static_cast<UInt32>(data_.size() - freeIndices_.size()));
 
 	return true;
 }

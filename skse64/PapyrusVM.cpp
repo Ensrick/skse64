@@ -173,12 +173,12 @@ VMStackInfo* VMClassRegistry::GetStackInfo(UInt32 stackId)
 
 	VMStackTableItem* item = allStacks.Find(&stackId);
 
-	if (item != NULL &&
-		item->data != NULL &&
-		item->data->unkData != NULL)
-	{
-		result = item->data->unkData->stackInfo;
-	}	
+	// The SSE map stores StackID -> BSTSmartPointer<Stack> directly. The old
+	// LE-era chain reads Stack::pages at +0x18 as another pointer (e.g.6),
+	// then dereferences it during persistent-object save cleanup. Keep the
+	// existing opaque return ABI; callers only test for presence, not fields.
+	if (item != NULL)
+		result = reinterpret_cast<VMStackInfo*>(item->data);
 
 	stackLock.Release();
 

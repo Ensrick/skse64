@@ -1,0 +1,27 @@
+name: Stack lookup regression
+on:
+  push:
+    paths:
+      - 'skse64/PapyrusVM.cpp'
+      - 'tests/stack_lookup/**'
+      - '.github/workflows/stack-lookup.yml'
+  pull_request:
+    paths:
+      - 'skse64/PapyrusVM.cpp'
+      - 'tests/stack_lookup/**'
+      - '.github/workflows/stack-lookup.yml'
+permissions:
+  contents: read
+jobs:
+  regression:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: cmake -S tests/stack_lookup -B build-stack-lookup
+      - run: cmake --build build-stack-lookup --config Release
+      - run: ctest --test-dir build-stack-lookup -C Release --output-on-failure
