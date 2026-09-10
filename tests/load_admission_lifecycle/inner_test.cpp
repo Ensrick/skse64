@@ -20,7 +20,13 @@ static void CheckAt(bool value, unsigned line) { ++checks; if(!value) throw std:
 #define Check(value) CheckAt(value,__LINE__)
 #define _MESSAGE(...) ((void)0)
 #define CALL_MEMBER_FN(object,name) (object)->name
-static unsigned GetEnvironmentVariableA(const char*,char*,unsigned) { return 0; }
+static std::string injectedName;
+static unsigned GetEnvironmentVariableA(const char* key,char* out,unsigned capacity) {
+    if(std::strcmp(key,"SKSE_AUTOMATION_REJECT_INNER_ONCE") || injectedName.empty()) return 0;
+    if(injectedName.size()>=capacity) return unsigned(injectedName.size()+1);
+    std::memcpy(out,injectedName.c_str(),injectedName.size()+1);
+    return unsigned(injectedName.size());
+}
 static bool GetConfigOption_UInt32(const char*,const char*,UInt32*) { return false; }
 struct VM { UInt32 ClearInvalidRegistrations() { throw std::runtime_error("unexpected VM mutation"); } };
 static VM* vm=nullptr;
@@ -107,6 +113,19 @@ int main() {
         nativeCalls=preloads=postloads=0;
         Check(!manager.LoadGame_Hook(stream,1,2,nullptr,3));
         Check(saveName=="Preserved.ess" && !nativeCalls && !preloads && !postloads && !finished && !g_loadGameLock.depth);
+        allowAcquire=true;nested=0;nativeResult=true;
+        for(const auto& invalid: {std::string("Different.ess"),std::string("../Outer.ess"),std::string(260,'x')}) {
+            injectedName=invalid;consumed=false;generation=42;finished=0;
+            Check(manager.LoadGame_Hook(stream,0xABCDEF12,0x1234ABCD,&manager,0xA5));
+        }
+        injectedName="Outer.ess";consumed=false;finished=0;saveName="Preserved.ess";
+        nativeCalls=preloads=postloads=closes=0;
+        Check(!manager.LoadGame_Hook(stream,1,2,nullptr,3));
+        Check(!nativeCalls && !preloads && !postloads && !closes && finished==42);
+        Check(saveName=="Preserved.ess" && !Serialization::s_admittedFilePrepared && !g_loadGameLock.depth);
+        consumed=false;finished=0;
+        Check(manager.LoadGame_Hook(stream,0xABCDEF12,0x1234ABCD,&manager,0xA5));
+        Check(nativeCalls==1 && preloads==1 && postloads==1 && closes==1 && finished==42);
         std::cout<<checks<<" actual inner-hook checks passed\n";
     } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -306,7 +306,25 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	LoadAdmissionRuntime::InnerAdmission admittedInner;
 	if (LoadAdmissionRuntime::Enabled()) admittedInner = LoadAdmissionRuntime::AcquireInner(unk0);
-	if (LoadAdmissionRuntime::Enabled() && (!admittedInner || !Serialization::PrepareAdmittedLoad(admittedInner.snapshot))) {
+	// Private one-shot fault injection, only in the experimental adapter.
+	// Exercise our existing pre-target false path; NEVER falsify native success.
+	// The recursive load lock serializes consumption, including nested calls.
+	static bool innerTestConsumed = false;
+	char innerTestName[260] = {};
+	const auto innerTestLength = GetEnvironmentVariableA("SKSE_AUTOMATION_REJECT_INNER_ONCE", innerTestName, sizeof(innerTestName));
+	bool validInnerTest = innerTestLength > 0 && innerTestLength < sizeof(innerTestName);
+	for (unsigned i = 0; validInnerTest && i < innerTestLength; ++i) {
+		const char c = innerTestName[i];
+		validInnerTest = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+			|| c == '_' || c == '-' || c == '.';
+	}
+	const bool injectInnerFalse = LoadAdmissionRuntime::Enabled() && admittedInner && !innerTestConsumed
+		&& validInnerTest && strcmp(innerTestName, saveName) == 0;
+	if (injectInnerFalse) {
+		innerTestConsumed = true;
+		_MESSAGE("SAVE_ADMISSION_INNER_TEST simulated=1 once=1 before_reader_bind_preload_and_native_target=1");
+	}
+	if (LoadAdmissionRuntime::Enabled() && (!admittedInner || injectInnerFalse || !Serialization::PrepareAdmittedLoad(admittedInner.snapshot))) {
 		_MESSAGE("SAVE_ADMISSION_INNER refused=1 before_preload_and_engine_target=1");
 		// A failed bind does not own the existing prepared reader. In particular,
 		// do not close another invocation's snapshot when preparation is busy.
