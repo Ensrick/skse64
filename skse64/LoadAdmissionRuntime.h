@@ -17,12 +17,19 @@ public:
 bool Enabled();
 // Current modpack prerequisite only. Does not rule out other error callbacks.
 bool HasSuppressedAchievementPrompt() noexcept;
-bool Begin(std::uint64_t** stream);
+// Captured under the context gate by Begin, before entering native code.
+// A raw address alone cannot identify an old request after allocator reuse.
+struct RequestToken {
+    void* stream;
+    std::uint64_t generation;
+    RequestToken(void* value = nullptr, std::uint64_t serial = 0) : stream(value), generation(serial) {}
+};
+bool Begin(std::uint64_t** stream, RequestToken& admitted);
 bool OwnsStream(void* stream);
 bool MatchesCoSave(void* handle);
 AdmittedSnapshot::Bytes SnapshotFor(void* stream) noexcept;
 void Finish(void* stream);
-void RequestReturned(void* admittedStream, void* callerStream, bool result);
+void RequestReturned(const RequestToken& admitted, void* callerStream, bool result);
 struct PendingObservation {
     bool acquired = false;
     bool present = false;

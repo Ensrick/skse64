@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <string>
 #include <source_location>
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+#include "../../skse64/LoadAdmissionRuntime.h"
+#endif
 using UInt8 = std::uint8_t;
 using UInt32 = std::uint32_t;
 using UInt64 = std::uint64_t;
@@ -63,10 +66,13 @@ static unsigned begins, returned;
 static void* admitted;
 static void* caller;
 static bool nativeResult;
-static bool Enabled() { return enabled; }
-static bool Begin(UInt64**) { ++begins; return allowed; }
-static void RequestReturned(void* a, void* c, bool result) {
-    ++returned; admitted=a; caller=c; nativeResult=result;
+bool Enabled() { return enabled; }
+bool Begin(UInt64** input, RequestToken& token) {
+    ++begins; token=allowed ? RequestToken(*input, 0xABCDEF0123456789) : RequestToken(); return allowed;
+}
+void RequestReturned(const RequestToken& token, void* c, bool result) {
+    require(token.generation==0xABCDEF0123456789);
+    ++returned; admitted=token.stream; caller=c; nativeResult=result;
 }
 }
 static unsigned ownership;

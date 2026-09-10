@@ -230,7 +230,8 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 	bool reject = g_rejectLoadBasename[0]
 		&& (!readable || _stricmp(name, g_rejectLoadBasename) == 0);
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-	if (!reject && LoadAdmissionRuntime::Enabled()) reject = !LoadAdmissionRuntime::Begin(stream);
+	LoadAdmissionRuntime::RequestToken admitted;
+	if (!reject && LoadAdmissionRuntime::Enabled()) reject = !LoadAdmissionRuntime::Begin(stream, admitted);
 #endif
 	_MESSAGE("LOAD_REQUEST_PROBE save=%s readable=%u arg1=%08X arg2=%02X arg3=%02X arg4=%08X reject=%u stream=%016llX identity=pointer_only",
 		readable ? name : "<unreadable>", unsigned(readable), arg1, unsigned(arg2), unsigned(arg3), arg4, unsigned(reject), reinterpret_cast<UInt64>(observedStream));
@@ -241,14 +242,12 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 		g_rejectedRequestNeedsRecovery = g_recoverRejectedMainLoad;
 		return false;
 	}
-#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-	void* admittedStream = LoadAdmissionRuntime::Enabled() && stream ? *stream : nullptr;
-#endif
 	const bool result = CALL_MEMBER_FN(this, LoadRequestProbe_Target)(stream, arg1, arg2, arg3, arg4);
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-	// Only compare the pointer value; the native caller owns its lifetime.
+	// Compare the captured generation and pointer values only. Never inspect
+	// the old stream after native execution; the native caller owns its lifetime.
 	if (LoadAdmissionRuntime::Enabled()) {
-		LoadAdmissionRuntime::RequestReturned(admittedStream, stream ? *stream : nullptr, result);
+		LoadAdmissionRuntime::RequestReturned(admitted, stream ? *stream : nullptr, result);
 		// A native false result is NOT our early veto. The outer target can
 		// transfer its stream to a later error callback before returning false.
 		// Preserve native failure UI/ownership; do not queue CancelLoading on

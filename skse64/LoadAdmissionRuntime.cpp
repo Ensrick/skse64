@@ -50,7 +50,8 @@ bool Enabled() {
     }();
     return enabled;
 }
-bool Begin(std::uint64_t** input) {
+bool Begin(std::uint64_t** input, RequestToken& admitted) {
+    admitted = {};
     if (!Enabled()) return true;
     try {
         // Engine Fixes installs this after SKSE initialization; inspect at each
@@ -122,6 +123,7 @@ bool Begin(std::uint64_t** input) {
         _MESSAGE("SAVE_ADMISSION_CONTEXT generation=%llu stream=%016llX seq=%llu identity=pointer_only",
             next->generation, static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(stream)), NextEvent());
         pending = std::move(next);
+        admitted = RequestToken(pending->stream, pending->generation);
         return true;
     } catch (const std::exception& error) {
         _MESSAGE("SAVE_ADMISSION experimental=1 refused=1 adapter_reason=%s", error.what());
@@ -191,9 +193,14 @@ void Finish(void* stream) {
         _MESSAGE("SAVE_ADMISSION_CONTEXT_RELEASE experimental=1 released=1 snapshot_readers_may_retain_lease=1 generation=%llu seq=%llu", generation, NextEvent());
     }
 }
-void RequestReturned(void* admittedStream, void* callerStream, bool result) {
+void RequestReturned(const RequestToken& admitted, void* callerStream, bool result) {
+    void* admittedStream = admitted.stream;
     TrackedGate lock(gate, gateOwned);
-    if (!pending || pending->stream != admittedStream) return;
+    // Native execution may finish one context and allow another before this
+    // wrapper returns. Never let an old request release the newer generation,
+    // even if allocator reuse gives it the identical address and basename.
+    if (!pending || !admitted.generation || pending->stream != admittedStream ||
+        pending->generation != admitted.generation) return;
     if (callerStream == admittedStream) {
         // Pinned caller625FFA..626024 unconditionally destroys its remaining
         // nonnull stream, whether target returned true or false. No deferred
