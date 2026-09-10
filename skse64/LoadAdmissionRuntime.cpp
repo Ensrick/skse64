@@ -12,6 +12,12 @@
 #include <atomic>
 #include <cstring>
 
+static_assert(ENSRICK_ADMISSION_INVALID_ARGUMENT==1 && ENSRICK_ADMISSION_FINGERPRINT_UNAVAILABLE==2 &&
+    ENSRICK_ADMISSION_MALFORMED_SAVE==3 && ENSRICK_ADMISSION_ACTIVE_PLUGINS_INVALID==4 &&
+    ENSRICK_ADMISSION_PLUGIN_MISMATCH==5 && ENSRICK_ADMISSION_LEASE_FAILED==6 &&
+    ENSRICK_ADMISSION_COSAVE_REFUSED==7 && ENSRICK_ADMISSION_OUT_OF_MEMORY==8 &&
+    ENSRICK_ADMISSION_INTERNAL_ERROR==9, "Update refusal message codes for changed ABI statuses");
+
 namespace LoadAdmissionRuntime {
 namespace {
 struct Context {
@@ -50,17 +56,24 @@ bool Enabled() {
     }();
     return enabled;
 }
-bool Begin(std::uint64_t** input, RequestToken& admitted) {
+bool Begin(std::uint64_t** input, RequestToken& admitted, LoadRefusal::Notice& refused) {
     admitted = {};
+    refused = LoadRefusal::Notice();
     if (!Enabled()) return true;
+    refused = LoadRefusal::Notice(LoadRefusal::AdapterFailure);
     try {
         // Engine Fixes installs this after SKSE initialization; inspect at each
         // request, not while installing hooks. Without it, the achievements
         // prompt can transfer ownership to an unverified deferred callback.
-        if (!HasSuppressedAchievementPrompt())
+        if (!HasSuppressedAchievementPrompt()) {
+            refused=LoadRefusal::Notice(LoadRefusal::UnsupportedStack);
             throw std::runtime_error("unsupported stack: Engine Fixes achievement-prompt suppression is absent; deferred admission is not supported");
+        }
         TrackedGate lock(gate, gateOwned);
-        if (pending) throw std::runtime_error("previous admitted load is still pending");
+        if (pending) {
+            refused=LoadRefusal::Notice(LoadRefusal::PreviousPending);
+            throw std::runtime_error("previous admitted load is still pending");
+        }
         std::uint64_t *stream = nullptr, vtable = 0, memory = 0;
         std::uint32_t size = 0, position = 0;
         std::uint8_t decompressed = 255;
@@ -112,7 +125,7 @@ bool Begin(std::uint64_t** input, RequestToken& admitted) {
         if (acquired) next->lease = std::shared_ptr<ensrick_admission_lease>(acquired, ensrick_admission_release);
         _MESSAGE("SAVE_ADMISSION experimental=1 status=%u reason=%s full=%u light=%u fingerprint=%016llX", status,
             result.reason, result.saved_full_count, result.saved_light_count, fingerprint);
-        if (status != ENSRICK_ADMISSION_OK) return false;
+        if (status != ENSRICK_ADMISSION_OK) { refused=LoadRefusal::Notice(status); return false; }
         if (ensrick_admission_lease_cosave(next->lease.get(), &next->snapshot.data, &next->snapshot.size) != ENSRICK_ADMISSION_OK ||
             !next->snapshot.data || !next->snapshot.size || next->snapshot.size > AdmittedSnapshot::MaximumBytes)
             throw std::runtime_error("validated co-save snapshot unavailable");
@@ -124,6 +137,7 @@ bool Begin(std::uint64_t** input, RequestToken& admitted) {
             next->generation, static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(stream)), NextEvent());
         pending = std::move(next);
         admitted = RequestToken(pending->stream, pending->generation);
+        refused=LoadRefusal::Notice();
         return true;
     } catch (const std::exception& error) {
         _MESSAGE("SAVE_ADMISSION experimental=1 refused=1 adapter_reason=%s", error.what());

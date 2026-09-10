@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <source_location>
+#include "../../skse64/LoadRefusalNotice.h"
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 #include "../../skse64/LoadAdmissionRuntime.h"
 #endif
@@ -17,15 +18,18 @@ using UInt64 = std::uint64_t;
 static char g_rejectLoadBasename[260]{};
 static bool g_recoverRejectedMainLoad;
 static thread_local bool g_rejectedRequestNeedsRecovery;
+static thread_local LoadRefusal::Notice g_refusedLoadNotice;
 static std::atomic<UInt64> g_loadRequestGeneration{0};
 static thread_local UInt64 g_rejectedRequestGeneration;
 static unsigned originalFailures, recoveries;
 static bool recoveryQueued;
+static unsigned recoveredReason;
 static void NotifyOriginalLoadFailure() { ++originalFailures; }
-static bool ScheduleRejectedMainLoadRecovery(UInt64 generation) {
+static bool ScheduleRejectedMainLoadRecovery(UInt64 generation, LoadRefusal::Notice notice) {
     if (originalFailures != 1) throw std::runtime_error("recovery preceded native failure notification");
     if (generation != g_loadRequestGeneration.load()) throw std::runtime_error("wrong request generation");
     ++recoveries;
+    recoveredReason=notice.code;
     return recoveryQueued;
 }
 static bool readable, targetResult;
@@ -67,7 +71,8 @@ static void* admitted;
 static void* caller;
 static bool nativeResult;
 bool Enabled() { return enabled; }
-bool Begin(UInt64** input, RequestToken& token) {
+bool Begin(UInt64** input, RequestToken& token, LoadRefusal::Notice& refused) {
+    refused=LoadRefusal::Notice(allowed ? 0 : 6);
     ++begins; token=allowed ? RequestToken(*input, 0xABCDEF0123456789) : RequestToken(); return allowed;
 }
 void RequestReturned(const RequestToken& token, void* c, bool result) {
@@ -112,6 +117,7 @@ int main() try {
         g_recoverRejectedMainLoad=recoveryMode!=0;
         recoveryQueued=recoveryMode==2;
         g_rejectedRequestNeedsRecovery=true;
+        g_refusedLoadNotice=LoadRefusal::Notice(999); // previous request must not leak
         originalFailures=recoveries=calls=0;
         const bool rejected=configuredReject || (enabled && !allowed);
         const bool result=manager.LoadRequestProbe_Hook(&pointer,expected1,expected2,expected3,expected4);
@@ -124,10 +130,14 @@ int main() try {
             require(LoadAdmissionRuntime::nativeResult==native);
         }
         require(g_rejectedRequestNeedsRecovery == (rejected && g_recoverRejectedMainLoad));
+        const unsigned reason=enabled && rejected ? (configuredReject ? LoadRefusal::DiagnosticVeto : 6u) : 0u;
+        require(g_refusedLoadNotice.code==reason);
         if (!result) {
             LoadRequestFailureRecovery_Hook();
             require(originalFailures==1 && recoveries==unsigned(rejected && g_recoverRejectedMainLoad));
+            if(recoveries) require(recoveredReason==reason);
             require(!g_rejectedRequestNeedsRecovery);
+            require(!g_refusedLoadNotice.code);
             originalFailures=recoveries=0;
             LoadRequestFailureRecovery_Hook();
             require(originalFailures==1 && recoveries==0);
@@ -143,6 +153,7 @@ int main() try {
             recoveryQueued = recoveryMode == 2;
             // Entry must clear stale recovery eligibility even for forwarded loads.
             g_rejectedRequestNeedsRecovery = true;
+            g_refusedLoadNotice=LoadRefusal::Notice(999);
             originalFailures = recoveries = 0;
             readable = mode != 3 && mode != 7;
             const bool configured = mode != 0 && mode != 4;
@@ -160,6 +171,7 @@ int main() try {
             require(calls == (reject ? 0u : 1u));
             require(pointer == &value && value == 0xDEADBEEF);
             require(g_rejectedRequestNeedsRecovery == (reject && g_recoverRejectedMainLoad));
+            require(!g_refusedLoadNotice.code);
             if (!result) {
                 LoadRequestFailureRecovery_Hook();
                 require(originalFailures == 1);

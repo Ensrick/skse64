@@ -10,6 +10,7 @@
 #include "PluginManager.h"
 #include "Hooks_UI.h"
 #include "LoadPluginSnapshot.h"
+#include "LoadRefusalNotice.h"
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 #include "LoadAdmissionRuntime.h"
 #endif
@@ -21,6 +22,7 @@ namespace {
 	char g_rejectLoadBasename[260] = {};
 	bool g_recoverRejectedMainLoad = false;
 	thread_local bool g_rejectedRequestNeedsRecovery = false;
+	thread_local LoadRefusal::Notice g_refusedLoadNotice;
 	std::atomic<UInt64> g_loadRequestGeneration{0};
 	thread_local UInt64 g_rejectedRequestGeneration = 0;
 
@@ -81,26 +83,29 @@ namespace {
 	class RejectedLoadUIRecovery : public UIDelegate_v1
 	{
 	public:
-		explicit RejectedLoadUIRecovery(UInt64 generation) : generation_(generation) {}
+		explicit RejectedLoadUIRecovery(UInt64 generation, LoadRefusal::Notice notice) : generation_(generation), notice_(notice) {}
 		void Run() override
 		{
 			const bool current = generation_ == g_loadRequestGeneration.load(std::memory_order_relaxed);
 			const bool queued = current && QueueRejectedMainLoadRecovery();
+			const bool noticeQueued = current && LoadRefusal::Queue(notice_);
 			_MESSAGE("LOAD_REQUEST_RECOVERY_UI diagnostic_only=1 generation=%llu current=%u main_cancel_queued=%u",
 				generation_, unsigned(current), unsigned(queued));
+			_MESSAGE("LOAD_REQUEST_REFUSAL_UI generation=%llu current=%u reason=%u notice_queued=%u",generation_,unsigned(current),notice_.code,unsigned(noticeQueued));
 		}
 		void Dispose() override { delete this; }
 	private:
 		UInt64 generation_;
+		LoadRefusal::Notice notice_; // owned code; no borrowed buffer/save path
 	};
 
-	bool ScheduleRejectedMainLoadRecovery(UInt64 generation)
+	bool ScheduleRejectedMainLoadRecovery(UInt64 generation, LoadRefusal::Notice notice)
 	{
 		// ProcessCommands drains native failure UI events before running this
 		// delegate. Cancellation is then queued for the next native UI pass.
 		auto* queue = UIManager::GetSingleton();
 		if (!queue) return false;
-		auto* task = new (std::nothrow) RejectedLoadUIRecovery(generation);
+		auto* task = new (std::nothrow) RejectedLoadUIRecovery(generation, notice);
 		if (!task) return false;
 		queue->QueueCommand(task);
 		return true;
@@ -211,10 +216,12 @@ void LoadRequestFailureRecovery_Hook()
 {
 	const bool recover = g_rejectedRequestNeedsRecovery;
 	const UInt64 generation = g_rejectedRequestGeneration;
+	const auto notice = g_refusedLoadNotice;
 	g_rejectedRequestNeedsRecovery = false;
+	g_refusedLoadNotice = LoadRefusal::Notice();
 	NotifyOriginalLoadFailure();
 	if (recover) {
-		const bool scheduled = ScheduleRejectedMainLoadRecovery(generation);
+		const bool scheduled = ScheduleRejectedMainLoadRecovery(generation, notice);
 		_MESSAGE("LOAD_REQUEST_RECOVERY diagnostic_only=1 native_failure_notified=1 deferred_ui_recovery=%u generation=%llu", unsigned(scheduled), generation);
 	}
 }
@@ -222,6 +229,7 @@ void LoadRequestFailureRecovery_Hook()
 bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UInt8 arg2, UInt8 arg3, UInt32 arg4)
 {
 	g_rejectedRequestNeedsRecovery = false;
+	g_refusedLoadNotice = LoadRefusal::Notice();
 	g_rejectedRequestGeneration = g_loadRequestGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
 	char name[260] = {};
 	UInt64* observedStream = nullptr;
@@ -231,7 +239,8 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 		&& (!readable || _stricmp(name, g_rejectLoadBasename) == 0);
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	LoadAdmissionRuntime::RequestToken admitted;
-	if (!reject && LoadAdmissionRuntime::Enabled()) reject = !LoadAdmissionRuntime::Begin(stream, admitted);
+	if (!reject && LoadAdmissionRuntime::Enabled()) reject = !LoadAdmissionRuntime::Begin(stream, admitted, g_refusedLoadNotice);
+	if (reject && LoadAdmissionRuntime::Enabled() && !g_refusedLoadNotice.code) g_refusedLoadNotice=LoadRefusal::Notice(LoadRefusal::DiagnosticVeto);
 #endif
 	_MESSAGE("LOAD_REQUEST_PROBE save=%s readable=%u arg1=%08X arg2=%02X arg3=%02X arg4=%08X reject=%u stream=%016llX identity=pointer_only",
 		readable ? name : "<unreadable>", unsigned(readable), arg1, unsigned(arg2), unsigned(arg3), arg4, unsigned(reject), reinterpret_cast<UInt64>(observedStream));

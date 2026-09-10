@@ -53,6 +53,32 @@ notification and returned ownership continue unchanged. This does not solve
 deferred callback lease cleanup or authorize production admission deployment.
 Assertions are caught and reported to stderr/exit1, not unhandled exceptions.
 
+## In-game refusal notice (experimental admission only)
+
+An early admission veto now carries a value-owned reason code through the same
+one-use thread-local failure channel and generation-stamped UI delegate. The
+delegate queues Main Menu recovery where eligible, then requests the engine's
+MessageBoxMenu with one OK button and no callback. It never calls Windows UI,
+changes a save, or enables recovery for native false results. No raw exception,
+file path, save name, or external plugin text is inserted into the message.
+Engine queuing success is logged as such, not as proof of actual rendering.
+
+New109 checks cover bounded fixed text, unknown/empty codes, every byte of the
+pinned34-byte Create signature, disabled/unsupported paths, native false and
+the exact five named arguments plus OK/null-terminated variadic button list.
+The expanded45-case production UI test includes copied reason lifetime,
+superseded generations and notification-queue failure. The144-case request test
+checks reset/consume of stale reason codes; ordinary/native failures cannot
+reuse an old notice. The original35-case UI count above describes the earlier
+recovery-only suite, not the current expanded test.
+
+Runtime inspection/tests use pinned1.7.104 Create RVA9625F0 (AE ID52269).
+CommonLib's Create declaration and actual native argument/string-copy path
+were checked. A matching prefix alone is not complete ABI or gameplay proof.
+Main Menu, Journal, quickload, acknowledgement, subsequent valid load, and
+normal quit require separate runtime evidence. This remains opt-in experimental
+admission work, not automatic protection of the normal installed game.
+
 Fable 5.1 independent read-only review (session
 92cab6dd-ff89-4acb-8a42-ae21c423a9cc) confirmed the ABI and warned that the
 failure path does not itself establish character preservation. Runtime tests

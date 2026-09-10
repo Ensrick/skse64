@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <mutex>
 #include "AdmittedSnapshot.h"
+#include "LoadRefusalNotice.h"
 namespace LoadAdmissionRuntime {
 // Diagnostic reentry must not try_lock a std::mutex this thread already owns.
 class TrackedGate {
@@ -24,7 +25,7 @@ struct RequestToken {
     std::uint64_t generation;
     RequestToken(void* value = nullptr, std::uint64_t serial = 0) : stream(value), generation(serial) {}
 };
-bool Begin(std::uint64_t** stream, RequestToken& admitted);
+bool Begin(std::uint64_t** stream, RequestToken& admitted, LoadRefusal::Notice& refused);
 bool OwnsStream(void* stream);
 bool MatchesCoSave(void* handle);
 AdmittedSnapshot::Bytes SnapshotFor(void* stream) noexcept;

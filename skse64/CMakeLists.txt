@@ -409,7 +409,7 @@ target_compile_features(
 # Explicit development-only integration; default builds remain unchanged.
 # Release packaging must pin/bundle corresponding admission and zlib sources.
 set(ENSRICK_SAVE_ADMISSION_SOURCE_DIR "" CACHE PATH "Experimental original admission source directory")
-target_sources(skse64 PRIVATE TextureReleaseFix.cpp TextureReleaseProbe.cpp)
+target_sources(skse64 PRIVATE TextureReleaseFix.cpp TextureReleaseProbe.cpp LoadRefusalNotice.cpp)
 if(ENSRICK_SAVE_ADMISSION_SOURCE_DIR)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     add_subdirectory("${ENSRICK_SAVE_ADMISSION_SOURCE_DIR}" ensrick-admission)

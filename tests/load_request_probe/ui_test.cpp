@@ -5,10 +5,16 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include "../../skse64/LoadRefusalNotice.h"
 using UInt64=std::uint64_t;
 static std::atomic<UInt64> g_loadRequestGeneration{1};
 static unsigned messages, releases;
 static bool haveMenus,haveQueue,mainOpen,journalOpen,factoryWorks;
+static unsigned notices,queuedCode;
+static bool noticeWorks=true;
+namespace LoadRefusal {
+bool Queue(Notice notice) { if(!Text(notice))return false; ++notices; queuedCode=notice.code; return noticeWorks; }
+}
 static void require(bool v){if(!v)throw std::runtime_error("UI recovery contract");}
 struct BSFixedString {
     std::string value;
@@ -41,7 +47,7 @@ static void* CreateUIMessageData(BSFixedString* type){
 template<class... T>void logMessage(T...){}
 #define _MESSAGE(...) logMessage(__VA_ARGS__)
 #include "ui-recovery.inc"
-int main(){
+int main() try {
     unsigned cases=0;
     for(unsigned mask=0;mask<32;++mask){
         haveMenus=bool(mask&1);haveQueue=bool(mask&2);mainOpen=bool(mask&4);
@@ -54,17 +60,23 @@ int main(){
         ++cases;
     }
     haveMenus=haveQueue=mainOpen=factoryWorks=true;journalOpen=false;
-    for(bool current:{false,true}){
-        messages=0;g_loadRequestGeneration=7;
-        require(ScheduleRejectedMainLoadRecovery(7));
+    for(bool current:{false,true}) for(unsigned reason:{0u,6u,999u}) for(bool works:{false,true}) {
+        messages=notices=queuedCode=0;g_loadRequestGeneration=7;noticeWorks=works;
+        LoadRefusal::Notice notice(reason);
+        require(ScheduleRejectedMainLoadRecovery(7,notice));
+        notice.code=7; // deferred task must own the original value
         require(pending&&messages==0); // Deferred, not immediate native enqueue.
         if(!current)g_loadRequestGeneration=8;
         auto* task=pending;pending=nullptr;
         task->Run();task->Dispose();
         require(messages==(current?1u:0u));
+        require(notices==(current && reason ? 1u : 0u));
+        if(notices) require(queuedCode==reason);
         ++cases;
     }
     haveQueue=false;
-    require(!ScheduleRejectedMainLoadRecovery(8)&&!pending);
+    require(!ScheduleRejectedMainLoadRecovery(8,LoadRefusal::Notice(6))&&!pending);
     std::cout<<++cases<<" production UI helper/deferred generation cases passed\n";
+} catch(const std::exception& error) {
+    std::cerr << error.what() << '\n'; return 1;
 }
