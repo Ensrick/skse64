@@ -31,8 +31,9 @@ static unsigned calls;
 static void ObserveLoadStreamSnapshot(UInt64**) {} // independent Windows fixture test
 static const char* sourceName;
 static void require(bool pass) { if (!pass) throw std::runtime_error("probe contract failed"); }
-static bool ReadLoadProbeName(UInt64** stream, char (&name)[260]) {
+static bool ReadLoadProbeName(UInt64** stream, char (&name)[260], UInt64*& observed) {
     require(stream == expectedStream);
+    observed = *stream;
     if (readable) std::strcpy(name,sourceName);
     return readable;
 }

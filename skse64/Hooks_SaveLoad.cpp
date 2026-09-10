@@ -105,9 +105,9 @@ namespace {
 		queue->QueueCommand(task);
 		return true;
 	}
-	bool ReadLoadProbeName(UInt64** input, char (&name)[260])
+	bool ReadLoadProbeName(UInt64** input, char (&name)[260], UInt64*& stream)
 	{
-		UInt64* stream = nullptr;
+		stream = nullptr;
 		const char* source = nullptr;
 		SIZE_T got = 0;
 		if (!input || !ReadProcessMemory(GetCurrentProcess(), input, &stream, sizeof(stream), &got)
@@ -224,15 +224,16 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 	g_rejectedRequestNeedsRecovery = false;
 	g_rejectedRequestGeneration = g_loadRequestGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
 	char name[260] = {};
-	const bool readable = ReadLoadProbeName(stream, name);
+	UInt64* observedStream = nullptr;
+	const bool readable = ReadLoadProbeName(stream, name, observedStream);
 	ObserveLoadStreamSnapshot(stream);
 	bool reject = g_rejectLoadBasename[0]
 		&& (!readable || _stricmp(name, g_rejectLoadBasename) == 0);
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	if (!reject && LoadAdmissionRuntime::Enabled()) reject = !LoadAdmissionRuntime::Begin(stream);
 #endif
-	_MESSAGE("LOAD_REQUEST_PROBE save=%s readable=%u arg1=%08X arg2=%02X arg3=%02X arg4=%08X reject=%u",
-		readable ? name : "<unreadable>", unsigned(readable), arg1, unsigned(arg2), unsigned(arg3), arg4, unsigned(reject));
+	_MESSAGE("LOAD_REQUEST_PROBE save=%s readable=%u arg1=%08X arg2=%02X arg3=%02X arg4=%08X reject=%u stream=%016llX identity=pointer_only",
+		readable ? name : "<unreadable>", unsigned(readable), arg1, unsigned(arg2), unsigned(arg3), arg4, unsigned(reject), reinterpret_cast<UInt64>(observedStream));
 	if (reject) {
 		// Return to the existing caller at625FFA; it calls627B20 for false.
 		// This diagnostic deliberately does not enter627DE0 or emit SKSE load messages.
