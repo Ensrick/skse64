@@ -249,7 +249,10 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 	// Only compare the pointer value; the native caller owns its lifetime.
 	if (LoadAdmissionRuntime::Enabled()) {
 		LoadAdmissionRuntime::RequestReturned(admittedStream, stream ? *stream : nullptr, result);
-		if (!result) g_rejectedRequestNeedsRecovery = g_recoverRejectedMainLoad;
+		// A native false result is NOT our early veto. The outer target can
+		// transfer its stream to a later error callback before returning false.
+		// Preserve native failure UI/ownership; do not queue CancelLoading on
+		// top of that callback. Recovery eligibility is set only before entry.
 	}
 #endif
 	_MESSAGE("LOAD_REQUEST_RESULT save=%s result=%u", readable ? name : "<unreadable>", unsigned(result));

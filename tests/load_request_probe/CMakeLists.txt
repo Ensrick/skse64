@@ -24,6 +24,14 @@ target_compile_features(load_request_probe PRIVATE cxx_std_20)
 target_include_directories(load_request_probe PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME production_request_probe COMMAND load_request_probe)
 
+# Compile the SAME production wrapper with its experimental branch present.
+# The non-admission executable cannot catch regressions hidden by this macro.
+add_executable(load_request_admission test.cpp)
+target_compile_features(load_request_admission PRIVATE cxx_std_20)
+target_compile_definitions(load_request_admission PRIVATE ENSRICK_EXPERIMENTAL_SAVE_ADMISSION=1)
+target_include_directories(load_request_admission PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME production_request_admission_recovery COMMAND load_request_admission)
+
 string(FIND "${source}" "bool QueueRejectedMainLoadRecovery(" ui_begin)
 string(FIND "${source}" "bool ReadLoadProbeName(" ui_end)
 if(ui_begin LESS 0 OR ui_end LESS ui_begin)

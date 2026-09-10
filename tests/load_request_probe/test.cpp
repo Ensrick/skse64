@@ -6,6 +6,8 @@
 #include <cctype>
 #include <iostream>
 #include <stdexcept>
+#include <string>
+#include <source_location>
 using UInt8 = std::uint8_t;
 using UInt32 = std::uint32_t;
 using UInt64 = std::uint64_t;
@@ -30,7 +32,9 @@ static UInt8 expected2, expected3;
 static unsigned calls;
 static void ObserveLoadStreamSnapshot(UInt64**) {} // independent Windows fixture test
 static const char* sourceName;
-static void require(bool pass) { if (!pass) throw std::runtime_error("probe contract failed"); }
+static void require(bool pass, std::source_location where=std::source_location::current()) {
+    if (!pass) throw std::runtime_error("probe contract failed at line " + std::to_string(where.line()));
+}
 static bool ReadLoadProbeName(UInt64** stream, char (&name)[260], UInt64*& observed) {
     require(stream == expectedStream);
     observed = *stream;
@@ -52,18 +56,81 @@ template<class... T> void logMessage(T...) {}
 struct BGSSaveLoadManager {
 #include "declarations.inc"
 };
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+namespace LoadAdmissionRuntime {
+static bool enabled, allowed;
+static unsigned begins, returned;
+static void* admitted;
+static void* caller;
+static bool nativeResult;
+static bool Enabled() { return enabled; }
+static bool Begin(UInt64**) { ++begins; return allowed; }
+static void RequestReturned(void* a, void* c, bool result) {
+    ++returned; admitted=a; caller=c; nativeResult=result;
+}
+}
+static unsigned ownership;
+static UInt64 replacement;
+#endif
 bool BGSSaveLoadManager::LoadRequestProbe_Target(UInt64** stream, UInt32 a, UInt8 b, UInt8 c, UInt32 d) {
     ++calls;
     require(stream == expectedStream && a == expected1 && b == expected2 && c == expected3 && d == expected4);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+    if (ownership == 1) *stream=nullptr; // native callback owns the stream
+    if (ownership == 2) *stream=&replacement; // unknown ownership, not terminal proof
+#endif
     return targetResult;
 }
 #include "production.inc"
-int main() {
+int main() try {
     BGSSaveLoadManager manager;
     UInt64 value = 0xDEADBEEF;
     UInt64* pointer = &value;
     expectedStream = &pointer;
     unsigned cases = 0;
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+    // Both native results and all ownership shapes must preserve the native
+    // failure UI path. Only a veto BEFORE native entry licenses our recovery.
+    for (bool enabled : {false,true}) for (bool allowed : {false,true})
+    for (bool configuredReject : {false,true}) for (bool native : {false,true})
+    for (unsigned owner=0;owner<3;++owner) for (unsigned recoveryMode=0;recoveryMode<3;++recoveryMode) {
+        pointer=&value;
+        ownership=owner;
+        LoadAdmissionRuntime::enabled=enabled;
+        LoadAdmissionRuntime::allowed=allowed;
+        LoadAdmissionRuntime::begins=LoadAdmissionRuntime::returned=0;
+        readable=true; sourceName="case.ess";
+        std::strcpy(g_rejectLoadBasename, configuredReject ? "case.ess" : "");
+        targetResult=native;
+        expected1=0xA1B2C3D4; expected2=0xAC; expected3=0xE7; expected4=0x10203040;
+        g_recoverRejectedMainLoad=recoveryMode!=0;
+        recoveryQueued=recoveryMode==2;
+        g_rejectedRequestNeedsRecovery=true;
+        originalFailures=recoveries=calls=0;
+        const bool rejected=configuredReject || (enabled && !allowed);
+        const bool result=manager.LoadRequestProbe_Hook(&pointer,expected1,expected2,expected3,expected4);
+        require(result == (!rejected && native));
+        require(calls == unsigned(!rejected));
+        require(LoadAdmissionRuntime::begins == unsigned(enabled && !configuredReject));
+        require(LoadAdmissionRuntime::returned == unsigned(enabled && !rejected));
+        if (enabled && !rejected) {
+            require(LoadAdmissionRuntime::admitted==&value && LoadAdmissionRuntime::caller==pointer);
+            require(LoadAdmissionRuntime::nativeResult==native);
+        }
+        require(g_rejectedRequestNeedsRecovery == (rejected && g_recoverRejectedMainLoad));
+        if (!result) {
+            LoadRequestFailureRecovery_Hook();
+            require(originalFailures==1 && recoveries==unsigned(rejected && g_recoverRejectedMainLoad));
+            require(!g_rejectedRequestNeedsRecovery);
+            originalFailures=recoveries=0;
+            LoadRequestFailureRecovery_Hook();
+            require(originalFailures==1 && recoveries==0);
+        }
+        ++cases;
+    }
+    std::cout << cases << " production experimental admission/recovery cases passed\n";
+    return 0;
+#endif
     for (unsigned b=0;b<256;++b) for (unsigned c=0;c<256;++c) {
         for (unsigned mode=0;mode<8;++mode) for(unsigned recoveryMode=0;recoveryMode<3;++recoveryMode) {
             g_recoverRejectedMainLoad = recoveryMode != 0;
@@ -101,4 +168,9 @@ int main() {
         }
     }
     std::cout << cases << " production forwarding/rejection cases passed\n";
+} catch (const std::exception& error) {
+    // Expected negative controls must report to the caller, never invoke an
+    // unhandled-exception dialog on the user's desktop.
+    std::cerr << error.what() << '\n';
+    return 1;
 }

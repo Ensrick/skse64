@@ -41,6 +41,18 @@ The 48 installation tests check capacity before either write, failure-hook-first
 ordering and unsuccessful return handling. Engine APIs are mocked; none of
 these tests validates engine UI cancellation, machine-code writes or gameplay.
 
+September10 regression: a second executable compiles the actual wrapper with
+`ENSRICK_EXPERIMENTAL_SAVE_ADMISSION` defined. Its 144 cases cover admission
+enabled/disabled, accepted/refused, configured veto, both native results, caller
+retention/callback transfer/unknown replacement, and all three recovery modes.
+The previous tests compiled out this branch and missed a native-false result
+incorrectly enabling our `CancelLoading` recovery. The new test failed against
+the old source at the recovery-eligibility assertion and passes after removing
+that assignment. Only an early veto now schedules our recovery; native failure
+notification and returned ownership continue unchanged. This does not solve
+deferred callback lease cleanup or authorize production admission deployment.
+Assertions are caught and reported to stderr/exit1, not unhandled exceptions.
+
 Fable 5.1 independent read-only review (session
 92cab6dd-ff89-4acb-8a42-ae21c423a9cc) confirmed the ABI and warned that the
 failure path does not itself establish character preservation. Runtime tests
