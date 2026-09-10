@@ -59,7 +59,11 @@ namespace Serialization
 	// locals
 
 	std::string		s_savePath;
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	AdmittedSnapshot::Stream<IFileStream> s_currentFile;
+#else
 	IFileStream		s_currentFile;
+#endif
 
 	typedef std::vector <PluginCallbacks>	PluginCallbackList;
 	PluginCallbackList	s_pluginCallbacks;
@@ -158,19 +162,19 @@ namespace Serialization
 
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	bool s_admittedFilePrepared = false;
-	bool PrepareAdmittedLoad()
+	bool PrepareAdmittedLoad(void* stream)
 	{
-		if (s_admittedFilePrepared || !s_currentFile.Open(s_savePath.c_str())) return false;
-		if (!LoadAdmissionRuntime::MatchesCoSave(s_currentFile.GetHandle())) {
-			s_currentFile.Close();
-			return false;
-		}
+		if (s_admittedFilePrepared || !s_currentFile.Bind(LoadAdmissionRuntime::SnapshotFor(stream))) return false;
 		s_admittedFilePrepared = true;
+		_MESSAGE("SAVE_ADMISSION_COSAVE_SNAPSHOT bound=1 bytes=%llu pathname_reopened=0", static_cast<UInt64>(s_currentFile.GetLength()));
 		return true;
 	}
 	void ClosePreparedLoad()
 	{
-		if (s_admittedFilePrepared) s_currentFile.Close();
+		if (s_admittedFilePrepared) {
+			_MESSAGE("SAVE_ADMISSION_COSAVE_SNAPSHOT unbound=1 cursor=%llu bytes=%llu fault=%u rejected_api_calls=%u", static_cast<UInt64>(s_currentFile.GetOffset()), static_cast<UInt64>(s_currentFile.GetLength()), s_currentFile.Fault(), s_currentFile.Misuse());
+			s_currentFile.Close();
+		}
 		s_admittedFilePrepared = false;
 	}
 #endif
@@ -227,6 +231,9 @@ namespace Serialization
 
 	bool OpenRecord(UInt32 type, UInt32 version)
 	{
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		if (s_currentFile.Bound()) { s_currentFile.RejectWriteOrInvalidCall(); return false; }
+#endif
 		if(!s_pluginHeader.numChunks)
 		{
 			ASSERT(!s_chunkOpen);
@@ -253,6 +260,9 @@ namespace Serialization
 
 	bool WriteRecordData(const void * buf, UInt32 length)
 	{
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		if (s_currentFile.Bound()) { s_currentFile.RejectWriteOrInvalidCall(); return false; }
+#endif
 		s_currentFile.WriteBuf(buf, length);
 
 		return true;
@@ -275,6 +285,9 @@ namespace Serialization
 	bool GetNextRecordInfo(UInt32 * type, UInt32 * version, UInt32 * length)
 	{
 		FlushReadRecord();
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		if (s_currentFile.Fault()) return false;
+#endif
 
 		if(!s_pluginHeader.numChunks)
 			return false;
@@ -282,6 +295,9 @@ namespace Serialization
 		s_pluginHeader.numChunks--;
 
 		s_currentFile.ReadBuf(&s_chunkHeader, sizeof(s_chunkHeader));
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		if (s_currentFile.Fault()) return false;
+#endif
 
 		*type =		s_chunkHeader.type;
 		*version =	s_chunkHeader.version;
@@ -294,12 +310,19 @@ namespace Serialization
 
 	UInt32 ReadRecordData(void * buf, UInt32 length)
 	{
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		if (s_currentFile.Bound() && (!s_chunkOpen || (!buf && length))) { s_currentFile.RejectWriteOrInvalidCall(); return 0; }
+		if (s_currentFile.Fault()) return 0;
+#endif
 		ASSERT(s_chunkOpen);
 
 		if(length > s_chunkHeader.length)
 			length = s_chunkHeader.length;
 
 		s_currentFile.ReadBuf(buf, length);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		if (s_currentFile.Fault()) return 0;
+#endif
 
 		s_chunkHeader.length -= length;
 
@@ -372,6 +395,11 @@ namespace Serialization
 
 	void HandleSaveGlobalData(void)
 	{
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		// Refuse BEFORE deletion as well as before Create: a different save's
+		// co-save is not protected by the current snapshot's read lease.
+		if (s_currentFile.Bound()) { _ERROR("SAVE_ADMISSION_COSAVE save_refused_while_bound=1"); return; }
+#endif
 		_MESSAGE("creating co-save");
 
 		DeleteFile(s_savePath.c_str());
@@ -453,10 +481,10 @@ namespace Serialization
 		_MESSAGE("loading co-save");
 
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-		// A guarded load consumes the exact pre-opened, lease-matched handle.
-		// Do not reopen by pathname between admission and plugin callbacks.
+		// A guarded load consumes the immutable bytes admission validated.
+		// Shared ownership pins the lease through all serialization callbacks.
 		if (LoadAdmissionRuntime::Enabled() && !s_admittedFilePrepared) {
-			_ERROR("SAVE_ADMISSION_COSAVE prepared_handle_missing=1 callbacks_refused=1");
+			_ERROR("SAVE_ADMISSION_COSAVE prepared_snapshot_missing=1 callbacks_refused=1");
 			return;
 		}
 		if(!s_admittedFilePrepared && !s_currentFile.Open(s_savePath.c_str()))
@@ -472,6 +500,9 @@ namespace Serialization
 			Header	header;
 
 			s_currentFile.ReadBuf(&header, sizeof(header));
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+			if (s_currentFile.Fault()) goto done;
+#endif
 
 			if(header.signature != Header::kSignature)
 			{
@@ -499,6 +530,9 @@ namespace Serialization
 			while(s_currentFile.GetRemain() >= sizeof(PluginHeader))
 			{
 				s_currentFile.ReadBuf(&s_pluginHeader, sizeof(s_pluginHeader));
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+				if (s_currentFile.Fault()) goto done;
+#endif
 
 				UInt64	pluginChunkStart = s_currentFile.GetOffset();
 
@@ -533,11 +567,17 @@ namespace Serialization
 				}
 
 				// if plugin failed to read all its data or threw exception, jump to the next chunk
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+				if (s_currentFile.Fault()) goto done;
+#endif
 				UInt64	expectedOffset = pluginChunkStart + s_pluginHeader.length;
 				if(s_currentFile.GetOffset() != expectedOffset)
 				{
 					_WARNING("HandleLoadGame: plugin did not read all of its data (at %016I64X expected %016I64X)", s_currentFile.GetOffset(), expectedOffset);
 					s_currentFile.SetOffset(expectedOffset);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+					if (s_currentFile.Fault()) goto done;
+#endif
 				}
 			}
 
@@ -556,9 +596,12 @@ namespace Serialization
 		}
 
 	done:
-		s_currentFile.Close();
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-		s_admittedFilePrepared = false;
+		if (s_currentFile.Fault()) _ERROR("SAVE_ADMISSION_COSAVE host_reader_fault=%u remaining_callbacks_not_completed=1", s_currentFile.Fault());
+		if (s_admittedFilePrepared) ClosePreparedLoad();
+		else s_currentFile.Close();
+#else
+		s_currentFile.Close();
 #endif
 	}
 

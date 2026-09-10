@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <mutex>
+#include "AdmittedSnapshot.h"
 namespace LoadAdmissionRuntime {
 // Diagnostic reentry must not try_lock a std::mutex this thread already owns.
 class TrackedGate {
@@ -17,6 +18,7 @@ bool Enabled();
 bool Begin(std::uint64_t** stream);
 bool OwnsStream(void* stream);
 bool MatchesCoSave(void* handle);
+AdmittedSnapshot::Bytes SnapshotFor(void* stream) noexcept;
 void Finish(void* stream);
 void RequestReturned(void* admittedStream, void* callerStream, bool result);
 struct PendingObservation {

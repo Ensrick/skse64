@@ -16,9 +16,9 @@ namespace {
 struct Context {
     void* stream = nullptr;
     std::string basename;
-    ensrick_admission_lease* lease = nullptr;
+    std::shared_ptr<ensrick_admission_lease> lease;
     std::uint64_t generation = 0;
-    ~Context() { ensrick_admission_release(lease); }
+    AdmittedSnapshot::Bytes snapshot;
 };
 std::mutex gate;
 thread_local bool gateOwned = false;
@@ -100,10 +100,16 @@ bool Begin(std::uint64_t** input) {
         request.cosave_path_capacity_units = static_cast<uint32_t>(pathUnits.size());
         ensrick_admission_result result = {}; result.struct_size = sizeof(result);
         std::unique_ptr<Context> next(new Context);
-        const auto status = ensrick_admission_begin(&request, &result, &next->lease);
+        ensrick_admission_lease* acquired = nullptr;
+        const auto status = ensrick_admission_begin(&request, &result, &acquired);
+        if (acquired) next->lease = std::shared_ptr<ensrick_admission_lease>(acquired, ensrick_admission_release);
         _MESSAGE("SAVE_ADMISSION experimental=1 status=%u reason=%s full=%u light=%u fingerprint=%016llX", status,
             result.reason, result.saved_full_count, result.saved_light_count, fingerprint);
         if (status != ENSRICK_ADMISSION_OK) return false;
+        if (ensrick_admission_lease_cosave(next->lease.get(), &next->snapshot.data, &next->snapshot.size) != ENSRICK_ADMISSION_OK ||
+            !next->snapshot.data || !next->snapshot.size || next->snapshot.size > AdmittedSnapshot::MaximumBytes)
+            throw std::runtime_error("validated co-save snapshot unavailable");
+        next->snapshot.owner = next->lease;
         next->stream = stream;
         next->basename = name;
         next->generation = generations.fetch_add(1, std::memory_order_relaxed)+1;
@@ -117,6 +123,13 @@ bool Begin(std::uint64_t** input) {
     return false;
 }
 std::uint64_t NextEvent() noexcept { return events.fetch_add(1, std::memory_order_relaxed)+1; }
+AdmittedSnapshot::Bytes SnapshotFor(void* stream) noexcept {
+    try {
+        TrackedGate lock(gate, gateOwned);
+        if (pending && pending->stream == stream) return pending->snapshot;
+    } catch (...) {}
+    return {};
+}
 PendingObservation ObservePending(void* stream) noexcept {
     PendingObservation result;
     if (gateOwned) return result;
@@ -147,7 +160,7 @@ bool OwnsStream(void* stream) {
 }
 bool MatchesCoSave(void* handle) {
     TrackedGate lock(gate, gateOwned);
-    const bool match = pending && ensrick_admission_lease_matches_handle(pending->lease, handle);
+    const bool match = pending && ensrick_admission_lease_matches_handle(pending->lease.get(), handle);
     _MESSAGE("SAVE_ADMISSION_COSAVE_HANDLE experimental=1 matched=%u", unsigned(match));
     return match;
 }
@@ -156,7 +169,7 @@ void Finish(void* stream) {
     if (pending && pending->stream == stream) {
         const auto generation = pending->generation;
         pending.reset();
-        _MESSAGE("SAVE_ADMISSION_LEASE experimental=1 released=1 generation=%llu seq=%llu", generation, NextEvent());
+        _MESSAGE("SAVE_ADMISSION_CONTEXT_RELEASE experimental=1 released=1 snapshot_readers_may_retain_lease=1 generation=%llu seq=%llu", generation, NextEvent());
     }
 }
 void RequestReturned(void* admittedStream, void* callerStream, bool result) {
@@ -168,7 +181,7 @@ void RequestReturned(void* admittedStream, void* callerStream, bool result) {
         // owner exists in this case. Release even after a pre-inner failure.
         const auto generation = pending->generation;
         pending.reset();
-        _MESSAGE("SAVE_ADMISSION_LEASE experimental=1 released=1 caller_retained_terminal_stream=1 result=%u generation=%llu seq=%llu", unsigned(result), generation, NextEvent());
+        _MESSAGE("SAVE_ADMISSION_CONTEXT_RELEASE experimental=1 released=1 snapshot_readers_may_retain_lease=1 caller_retained_terminal_stream=1 result=%u generation=%llu seq=%llu", unsigned(result), generation, NextEvent());
     } else {
         // 627FF2 clears the caller pointer when transferring to a callback.
         // Keep the lease until its inner load; cancellation/destruction of

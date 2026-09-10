@@ -15,12 +15,14 @@ using LoadAdmissionRuntime::PendingObservation;
 using LoadAdmissionRuntime::TrackedGate;
 #define _MESSAGE(...) ((void)0)
 static unsigned checks, closes;
+static unsigned leaseCloses;
 static void Check(bool value) { ++checks; if (!value) throw std::runtime_error("lifecycle assertion failed"); }
 struct Context {
     void* stream;
     std::string basename;
-    void* lease;
+    std::shared_ptr<void> lease;
     std::uint64_t generation;
+    AdmittedSnapshot::Bytes snapshot;
     ~Context() { ++closes; }
 };
 static std::unique_ptr<Context> pending;
@@ -51,7 +53,12 @@ int main() {
         readable.push_back({stream, sizeof(stream)});
         readable.push_back({name.c_str(), name.size()+1});
         char other[8] = {};
-        const auto create = [&]() { pending.reset(new Context{stream, "TestSave.ess", stream}); };
+        const auto create = [&]() {
+            pending.reset(new Context{stream, "TestSave.ess", std::shared_ptr<void>(stream, [](void*){++leaseCloses;}), 0, {}});
+            pending->snapshot.owner=pending->lease;
+            pending->snapshot.data=reinterpret_cast<const std::uint8_t*>(stream);
+            pending->snapshot.size=sizeof(stream);
+        };
         Check(!OwnsStream(stream));
         const auto empty = ObservePending(stream);
         Check(empty.acquired && !empty.present && !empty.matched && empty.generation == 0);
@@ -94,6 +101,13 @@ int main() {
             Finish(stream); Check(!pending && closes == before+3);
             RequestReturned(stream, stream, result); Check(closes == before+3);
         }
+        Check(!SnapshotFor(stream).owner);
+        create(); Check(!SnapshotFor(other).owner);
+        auto held=SnapshotFor(stream);
+        Check(held.owner && held.data==reinterpret_cast<const std::uint8_t*>(stream) && held.size==sizeof(stream));
+        const auto beforeLease=leaseCloses;
+        Finish(stream); Check(!pending && leaseCloses==beforeLease);
+        held={}; Check(leaseCloses==beforeLease+1);
         std::cout << checks << " actual lifecycle checks passed\n";
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

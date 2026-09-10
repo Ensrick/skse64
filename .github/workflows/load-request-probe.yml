@@ -8,6 +8,9 @@ on:
       - 'skse64/LoadAdmissionRuntime.*'
       - 'skse64/LoadStreamLifetime.*'
       - 'tests/load_stream_lifetime/**'
+      - 'skse64/AdmittedSnapshot.h'
+      - 'skse64/Serialization.*'
+      - 'tests/admitted_snapshot/**'
       - 'skse64/PapyrusMemberGuard.*'
       - 'tests/papyrus_member_guard/**'
       - 'tests/load_admission_lifecycle/**'
@@ -22,6 +25,9 @@ on:
       - 'skse64/LoadAdmissionRuntime.*'
       - 'skse64/LoadStreamLifetime.*'
       - 'tests/load_stream_lifetime/**'
+      - 'skse64/AdmittedSnapshot.h'
+      - 'skse64/Serialization.*'
+      - 'tests/admitted_snapshot/**'
       - 'skse64/PapyrusMemberGuard.*'
       - 'tests/papyrus_member_guard/**'
       - 'tests/load_admission_lifecycle/**'
@@ -52,6 +58,9 @@ jobs:
       - run: cmake -S tests/load_stream_lifetime -B build-stream-lifetime
       - run: cmake --build build-stream-lifetime --config Release
       - run: ctest --test-dir build-stream-lifetime -C Release --output-on-failure
+      - run: cmake -S tests/admitted_snapshot -B build-admitted-snapshot
+      - run: cmake --build build-admitted-snapshot --config Release
+      - run: ctest --test-dir build-admitted-snapshot -C Release --output-on-failure
       - run: cmake -S tests/papyrus_member_guard -B build-member-guard
       - run: cmake --build build-member-guard --config Release
       - run: ctest --test-dir build-member-guard -C Release --output-on-failure

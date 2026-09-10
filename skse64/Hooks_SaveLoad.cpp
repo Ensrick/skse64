@@ -294,7 +294,7 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 
 	Serialization::SetSaveName(saveName);
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-	if (LoadAdmissionRuntime::Enabled() && (!LoadAdmissionRuntime::OwnsStream(unk0) || !Serialization::PrepareAdmittedLoad())) {
+	if (LoadAdmissionRuntime::Enabled() && (!LoadAdmissionRuntime::OwnsStream(unk0) || !Serialization::PrepareAdmittedLoad(unk0))) {
 		_MESSAGE("SAVE_ADMISSION_INNER refused=1 before_preload_and_engine_target=1");
 		Serialization::ClosePreparedLoad();
 		Serialization::SetSaveName(NULL);
