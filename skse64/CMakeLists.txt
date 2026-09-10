@@ -406,6 +406,17 @@ target_compile_features(
 		cxx_std_11
 )
 
+# Explicit development-only integration; default builds remain unchanged.
+# Release packaging must pin/bundle corresponding admission and zlib sources.
+set(ENSRICK_SAVE_ADMISSION_SOURCE_DIR "" CACHE PATH "Experimental original admission source directory")
+if(ENSRICK_SAVE_ADMISSION_SOURCE_DIR)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_subdirectory("${ENSRICK_SAVE_ADMISSION_SOURCE_DIR}" ensrick-admission)
+    target_sources(skse64 PRIVATE LoadAdmissionRuntime.cpp)
+    target_compile_definitions(skse64 PRIVATE ENSRICK_EXPERIMENTAL_SAVE_ADMISSION=1)
+    target_link_libraries(skse64 PRIVATE save_admission_abi)
+endif()
+
 target_include_directories(
 	${PROJECT_NAME}
 	PUBLIC

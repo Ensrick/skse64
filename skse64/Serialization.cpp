@@ -1,5 +1,8 @@
 #include "skse64/Serialization.h"
 #include "common/IFileStream.h"
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+#include "LoadAdmissionRuntime.h"
+#endif
 #include "skse64/PluginManager.h"
 #include "GameAPI.h"
 #include "skse64_common/skse_version.h"
@@ -145,6 +148,32 @@ namespace Serialization
 		GetPluginInfo(plugin)->formDelete = callback;
 	}
 
+	std::string GetCoSavePath(const char* name)
+	{
+		std::string base(name ? name : "");
+		if (base.size() >= 4 && _stricmp(base.c_str()+base.size()-4, ".ess") == 0)
+			base.resize(base.size()-4);
+		return MakeSavePath(base, ".skse");
+	}
+
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	bool s_admittedFilePrepared = false;
+	bool PrepareAdmittedLoad()
+	{
+		if (s_admittedFilePrepared || !s_currentFile.Open(s_savePath.c_str())) return false;
+		if (!LoadAdmissionRuntime::MatchesCoSave(s_currentFile.GetHandle())) {
+			s_currentFile.Close();
+			return false;
+		}
+		s_admittedFilePrepared = true;
+		return true;
+	}
+	void ClosePreparedLoad()
+	{
+		if (s_admittedFilePrepared) s_currentFile.Close();
+		s_admittedFilePrepared = false;
+	}
+#endif
 	void SetSaveName(const char * name)
 	{
 		if(name)
@@ -155,7 +184,7 @@ namespace Serialization
 				save_name = save_name.substr(0, save_name.length() - 4);								
 			
 			_MESSAGE("save name is %s", save_name.c_str());
-			s_savePath = MakeSavePath(save_name, ".skse");
+			s_savePath = GetCoSavePath(name);
 			_MESSAGE("full save path: %s", s_savePath.c_str());
 		}
 		else
@@ -423,7 +452,17 @@ namespace Serialization
 	{
 		_MESSAGE("loading co-save");
 
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		// A guarded load consumes the exact pre-opened, lease-matched handle.
+		// Do not reopen by pathname between admission and plugin callbacks.
+		if (LoadAdmissionRuntime::Enabled() && !s_admittedFilePrepared) {
+			_ERROR("SAVE_ADMISSION_COSAVE prepared_handle_missing=1 callbacks_refused=1");
+			return;
+		}
+		if(!s_admittedFilePrepared && !s_currentFile.Open(s_savePath.c_str()))
+#else
 		if(!s_currentFile.Open(s_savePath.c_str()))
+#endif
 		{
 			return;
 		}
@@ -518,6 +557,9 @@ namespace Serialization
 
 	done:
 		s_currentFile.Close();
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+		s_admittedFilePrepared = false;
+#endif
 	}
 
 	void HandleDeleteSave(std::string saveName)

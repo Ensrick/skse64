@@ -5,6 +5,8 @@ on:
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'
       - 'skse64/LoadPluginSnapshot.h'
+      - 'skse64/LoadAdmissionRuntime.*'
+      - 'tests/load_admission_lifecycle/**'
       - 'tests/plugin_snapshot/**'
       - 'tests/load_request_probe/**'
       - '.github/workflows/load-request-probe.yml'
@@ -13,6 +15,8 @@ on:
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'
       - 'skse64/LoadPluginSnapshot.h'
+      - 'skse64/LoadAdmissionRuntime.*'
+      - 'tests/load_admission_lifecycle/**'
       - 'tests/plugin_snapshot/**'
       - 'tests/load_request_probe/**'
       - '.github/workflows/load-request-probe.yml'
@@ -34,3 +38,6 @@ jobs:
       - run: cmake -S tests/plugin_snapshot -B build-plugin-snapshot
       - run: cmake --build build-plugin-snapshot --config Release
       - run: ctest --test-dir build-plugin-snapshot -C Release --output-on-failure
+      - run: cmake -S tests/load_admission_lifecycle -B build-admission-lifecycle
+      - run: cmake --build build-admission-lifecycle --config Release
+      - run: ctest --test-dir build-admission-lifecycle -C Release --output-on-failure

@@ -10,6 +10,9 @@
 #include "PluginManager.h"
 #include "Hooks_UI.h"
 #include "LoadPluginSnapshot.h"
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+#include "LoadAdmissionRuntime.h"
+#endif
 #include <atomic>
 #include <new>
 
@@ -130,6 +133,15 @@ namespace {
 		// Never call an unknown virtual, change a cursor, or dump player data.
 		char enabled[2] = {};
 		if (GetEnvironmentVariableA("SKSE_AUTOMATION_LOAD_STREAM_PROBE", enabled, sizeof(enabled)) != 1 || enabled[0] != '1') return;
+		// Query the loaded bridge; zero is deliberately NOT a valid identity.
+		// Never load/initialize a plugin here or substitute a JSON-derived value.
+		const auto currency = GetModuleHandleA("EnsrickCurrencyDenominations.dll");
+		typedef UInt64 (*CurrencyIdentityGetter)();
+		const auto identity = currency ? reinterpret_cast<CurrencyIdentityGetter>(
+			GetProcAddress(currency, "EnsrickCurrency_GetAdmissionFingerprintV1")) : nullptr;
+		const UInt64 fingerprint = identity ? identity() : 0;
+		_MESSAGE("LOAD_CURRENCY_IDENTITY diagnostic_only=1 module=%u export=%u fingerprint=%016llX ready=%u",
+			unsigned(currency != nullptr), unsigned(identity != nullptr), fingerprint, unsigned(fingerprint != 0));
 		UInt64* stream = nullptr;
 		UInt64 vtable = 0, memory = 0;
 		UInt32 size = 0, position = 0;
@@ -214,8 +226,11 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 	char name[260] = {};
 	const bool readable = ReadLoadProbeName(stream, name);
 	ObserveLoadStreamSnapshot(stream);
-	const bool reject = g_rejectLoadBasename[0]
+	bool reject = g_rejectLoadBasename[0]
 		&& (!readable || _stricmp(name, g_rejectLoadBasename) == 0);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	if (!reject && LoadAdmissionRuntime::Enabled()) reject = !LoadAdmissionRuntime::Begin(stream);
+#endif
 	_MESSAGE("LOAD_REQUEST_PROBE save=%s readable=%u arg1=%08X arg2=%02X arg3=%02X arg4=%08X reject=%u",
 		readable ? name : "<unreadable>", unsigned(readable), arg1, unsigned(arg2), unsigned(arg3), arg4, unsigned(reject));
 	if (reject) {
@@ -225,7 +240,17 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 		g_rejectedRequestNeedsRecovery = g_recoverRejectedMainLoad;
 		return false;
 	}
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	void* admittedStream = LoadAdmissionRuntime::Enabled() && stream ? *stream : nullptr;
+#endif
 	const bool result = CALL_MEMBER_FN(this, LoadRequestProbe_Target)(stream, arg1, arg2, arg3, arg4);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	// Only compare the pointer value; the native caller owns its lifetime.
+	if (LoadAdmissionRuntime::Enabled()) {
+		LoadAdmissionRuntime::RequestReturned(admittedStream, stream ? *stream : nullptr, result);
+		if (!result) g_rejectedRequestNeedsRecovery = g_recoverRejectedMainLoad;
+	}
+#endif
 	_MESSAGE("LOAD_REQUEST_RESULT save=%s result=%u", readable ? name : "<unreadable>", unsigned(result));
 	return result;
 }
@@ -267,6 +292,16 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 	g_loadGameLock.Enter();
 
 	Serialization::SetSaveName(saveName);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	if (LoadAdmissionRuntime::Enabled() && (!LoadAdmissionRuntime::OwnsStream(unk0) || !Serialization::PrepareAdmittedLoad())) {
+		_MESSAGE("SAVE_ADMISSION_INNER refused=1 before_preload_and_engine_target=1");
+		Serialization::ClosePreparedLoad();
+		Serialization::SetSaveName(NULL);
+		LoadAdmissionRuntime::Finish(unk0);
+		g_loadGameLock.Leave();
+		return false;
+	}
+#endif
 	PluginManager::Dispatch_Message(0, SKSEMessagingInterface::kMessage_PreLoadGame, (void*)saveName, strlen(saveName), NULL);
 	// 1.7.104 passes a sixth ABI argument (including this), a byte in the
 	// caller's [rsp+28h]. The target reads it at entry-rsp+30h and uses it
@@ -279,6 +314,12 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 	if (traceLoadArguments)
 		_MESSAGE("LOAD_ARGUMENT_FORWARD save=%s arg1=%08X arg2=%08X sixth=%02X", saveName, unk1, unk2, unsigned(unk4));
 	bool result = CALL_MEMBER_FN(this, LoadGame_HookTarget)(unk0, unk1, unk2, unk3, unk4);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	if (LoadAdmissionRuntime::Enabled()) {
+		Serialization::ClosePreparedLoad();
+		LoadAdmissionRuntime::Finish(unk0);
+	}
+#endif
 	if (traceLoadArguments)
 		_MESSAGE("LOAD_ARGUMENT_RESULT save=%s result=%u", saveName, unsigned(result));
 	PluginManager::Dispatch_Message(0, SKSEMessagingInterface::kMessage_PostLoadGame, (void*)result, 1, NULL);

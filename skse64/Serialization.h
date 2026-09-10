@@ -41,6 +41,11 @@ namespace Serialization
 	void	SetFormDeleteCallback(PluginHandle plugin, SKSESerializationInterface::FormDeleteCallback callback);
 
 	void	SetSaveName(const char * name);
+	std::string GetCoSavePath(const char* name);
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	bool PrepareAdmittedLoad();
+	void ClosePreparedLoad();
+#endif
 	bool	WriteRecord(UInt32 type, UInt32 version, const void * buf, UInt32 length);
 	bool	OpenRecord(UInt32 type, UInt32 version);
 	bool	WriteRecordData(const void * buf, UInt32 length);
