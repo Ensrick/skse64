@@ -1,0 +1,29 @@
+name: Diagnostic load-request probe regression
+on:
+  push:
+    paths:
+      - 'skse64/Hooks_SaveLoad.cpp'
+      - 'skse64/GameData.h'
+      - 'tests/load_request_probe/**'
+      - '.github/workflows/load-request-probe.yml'
+  pull_request:
+    paths:
+      - 'skse64/Hooks_SaveLoad.cpp'
+      - 'skse64/GameData.h'
+      - 'tests/load_request_probe/**'
+      - '.github/workflows/load-request-probe.yml'
+permissions:
+  contents: read
+jobs:
+  regression:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: cmake -S tests/load_request_probe -B build-load-request-probe
+      - run: cmake --build build-load-request-probe --config Release
+      - run: ctest --test-dir build-load-request-probe -C Release --output-on-failure

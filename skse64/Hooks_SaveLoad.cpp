@@ -9,6 +9,50 @@
 #include "PapyrusVM.h"
 #include "PluginManager.h"
 
+namespace {
+	// Diagnostic experiment only. Not installed unless explicitly opted in.
+	char g_rejectLoadBasename[260] = {};
+	bool ReadLoadProbeName(UInt64** input, char (&name)[260])
+	{
+		UInt64* stream = nullptr;
+		const char* source = nullptr;
+		SIZE_T got = 0;
+		if (!input || !ReadProcessMemory(GetCurrentProcess(), input, &stream, sizeof(stream), &got)
+			|| got != sizeof(stream) || !stream)
+			return false;
+		if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const char*>(stream) + 0xBB0,
+			&source, sizeof(source), &got) || got != sizeof(source) || !source)
+			return false;
+		for (size_t i = 0; i < sizeof(name); ++i) {
+			if (!ReadProcessMemory(GetCurrentProcess(), source + i, &name[i], 1, &got) || got != 1)
+				return false;
+			if (!name[i])
+				return i > 0;
+		}
+		name[sizeof(name) - 1] = 0;
+		return false;
+	}
+}
+
+bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UInt8 arg2, UInt8 arg3, UInt32 arg4)
+{
+	char name[260] = {};
+	const bool readable = ReadLoadProbeName(stream, name);
+	const bool reject = g_rejectLoadBasename[0]
+		&& (!readable || _stricmp(name, g_rejectLoadBasename) == 0);
+	_MESSAGE("LOAD_REQUEST_PROBE save=%s readable=%u arg1=%08X arg2=%02X arg3=%02X arg4=%08X reject=%u",
+		readable ? name : "<unreadable>", unsigned(readable), arg1, unsigned(arg2), unsigned(arg3), arg4, unsigned(reject));
+	if (reject) {
+		// Return to the existing caller at625FFA; it calls627B20 for false.
+		// This diagnostic deliberately does not enter627DE0 or emit SKSE load messages.
+		_MESSAGE("LOAD_REQUEST_REJECTED diagnostic_only=1 engine_target_entered=0");
+		return false;
+	}
+	const bool result = CALL_MEMBER_FN(this, LoadRequestProbe_Target)(stream, arg1, arg2, arg3, arg4);
+	_MESSAGE("LOAD_REQUEST_RESULT save=%s result=%u", readable ? name : "<unreadable>", unsigned(result));
+	return result;
+}
+
 void BGSSaveLoadManager::SaveGame_Hook(UInt64 *unk0)
 {
 	const char *saveName = reinterpret_cast<const char *>(unk0[0xBB0 / 8]);
@@ -146,6 +190,25 @@ RelocAddr <uintptr_t> DeleteSaveGame_Enter2(0x00614690 + 0x17);
 
 void Hooks_SaveLoad_Commit(void)
 {
+	char requestProbe[2] = {};
+	if (GetEnvironmentVariableA("SKSE_AUTOMATION_LOAD_REQUEST_PROBE", requestProbe, sizeof(requestProbe)) == 1
+		&& requestProbe[0] == '1') {
+		const DWORD length = GetEnvironmentVariableA("SKSE_AUTOMATION_REJECT_LOAD", g_rejectLoadBasename, sizeof(g_rejectLoadBasename));
+		bool valid = length < sizeof(g_rejectLoadBasename);
+		for (DWORD i = 0; valid && i < length; ++i) {
+			const char c = g_rejectLoadBasename[i];
+			valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+				|| c == '_' || c == '-' || c == '.';
+		}
+		RelocAddr<uintptr_t> requestCall(0x00625FF5);
+		const UInt8 expected[] = { 0xE8, 0xE6, 0x1D, 0x00, 0x00 };
+		if (valid && memcmp(reinterpret_cast<const void*>(requestCall.GetUIntPtr()), expected, sizeof(expected)) == 0) {
+			g_branchTrampoline.Write5Call(requestCall, GetFnAddr(&BGSSaveLoadManager::LoadRequestProbe_Hook));
+			_MESSAGE("LOAD_REQUEST_PROBE_INSTALLED diagnostic_only=1 reject_basename=%s", g_rejectLoadBasename);
+		} else {
+			_MESSAGE("LOAD_REQUEST_PROBE_NOT_INSTALLED invalid_input_or_call_bytes=1");
+		}
+	}
 	// Load & Save
 	g_branchTrampoline.Write5Call(SaveGame_HookTarget_Enter, GetFnAddr(&BGSSaveLoadManager::SaveGame_Hook));
 	g_branchTrampoline.Write5Call(LoadGame_HookTarget_Enter, GetFnAddr(&BGSSaveLoadManager::LoadGame_Hook));

@@ -743,6 +743,7 @@ public:
 	// used by Hooks_SaveLoad
 	void	SaveGame_Hook(UInt64 *unk0);
 	bool	LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, void *unk3, UInt8 unk4);
+	bool	LoadRequestProbe_Hook(UInt64 **stream, UInt32 arg1, UInt8 arg2, UInt8 arg3, UInt32 arg4);
 	void	ProcessEvents_Hook(void);
 	void	DeleteSavegame_Hook(const char * saveName, UInt32 unk1);
 
@@ -867,6 +868,7 @@ public:
 
 	DEFINE_MEMBER_FN(SaveGame_HookTarget, void, 0x00618260, UInt64 *unk0);
 	DEFINE_MEMBER_FN(LoadGame_HookTarget, bool, 0x00618970, UInt64 *unk0, UInt32 unk1, UInt32 unk2, void *unk3, UInt8 unk4);
+	DEFINE_MEMBER_FN(LoadRequestProbe_Target, bool, 0x00627DE0, UInt64 **stream, UInt32 arg1, UInt8 arg2, UInt8 arg3, UInt32 arg4);
 
 	DEFINE_MEMBER_FN(ProcessEvents_Internal, void, 0x00625B90);
 	DEFINE_MEMBER_FN(DeleteSavegame, void, 0x00622780, const char * saveName, UInt32 unk1);
