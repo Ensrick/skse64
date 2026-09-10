@@ -26,10 +26,17 @@ struct RequestToken {
     RequestToken(void* value = nullptr, std::uint64_t serial = 0) : stream(value), generation(serial) {}
 };
 bool Begin(std::uint64_t** stream, RequestToken& admitted, LoadRefusal::Notice& refused);
-bool OwnsStream(void* stream);
+struct InnerAdmission {
+    RequestToken token;
+    AdmittedSnapshot::Bytes snapshot;
+    explicit operator bool() const noexcept { return token.stream && token.generation && snapshot.owner; }
+};
+// Single-consumer acquisition captures name, generation and owned bytes atomically.
+// This does not prove allocation identity before acquisition after a deferred
+// cancellation: native lifetime coverage remains a production prerequisite.
+InnerAdmission AcquireInner(void* stream) noexcept;
 bool MatchesCoSave(void* handle);
-AdmittedSnapshot::Bytes SnapshotFor(void* stream) noexcept;
-void Finish(void* stream);
+void Finish(const RequestToken& token);
 void RequestReturned(const RequestToken& admitted, void* callerStream, bool result);
 struct PendingObservation {
     bool acquired = false;

@@ -26,6 +26,7 @@ struct Context {
     std::shared_ptr<ensrick_admission_lease> lease;
     std::uint64_t generation = 0;
     AdmittedSnapshot::Bytes snapshot;
+    bool innerAcquired = false;
 };
 std::mutex gate;
 thread_local bool gateOwned = false;
@@ -158,13 +159,6 @@ bool HasSuppressedAchievementPrompt() noexcept {
         return matched;
     } catch (...) { return false; }
 }
-AdmittedSnapshot::Bytes SnapshotFor(void* stream) noexcept {
-    try {
-        TrackedGate lock(gate, gateOwned);
-        if (pending && pending->stream == stream) return pending->snapshot;
-    } catch (...) {}
-    return {};
-}
 PendingObservation ObservePending(void* stream) noexcept {
     PendingObservation result;
     if (gateOwned) return result;
@@ -179,19 +173,27 @@ PendingObservation ObservePending(void* stream) noexcept {
     } catch (...) {} // failed observation is unknown, never "no pending load"
     return result;
 }
-bool OwnsStream(void* stream) {
-    TrackedGate lock(gate, gateOwned);
-    if (!pending || pending->stream != stream) return false;
-    // The buffer is legitimately decompressed between these hooks; its raw
-    // byte count cannot be compared here. Name continuity adds a check but is
-    // NOT proof against ABA reuse after an unobserved async cancellation.
-    const char* name = nullptr;
-    if (!Read(static_cast<const char*>(stream)+0xBB0, &name, sizeof(name)) || !name) return false;
-    for (size_t i = 0; i <= pending->basename.size(); ++i) {
-        char value = 0;
-        if (!Read(name+i, &value, 1) || value != pending->basename.c_str()[i]) return false;
-    }
-    return true;
+InnerAdmission AcquireInner(void* stream) noexcept {
+    try {
+        TrackedGate lock(gate, gateOwned);
+        if (!stream || !pending || pending->innerAcquired || !pending->generation || pending->stream != stream ||
+            !pending->snapshot.owner || !pending->snapshot.data || !pending->snapshot.size ||
+            pending->snapshot.size > AdmittedSnapshot::MaximumBytes) return {};
+        // The buffer is legitimately decompressed between these hooks; its raw
+        // byte count cannot be compared here. Name continuity adds a check but is
+        // NOT proof against ABA reuse after an unobserved async cancellation.
+        const char* name = nullptr;
+        if (!Read(static_cast<const char*>(stream)+0xBB0, &name, sizeof(name)) || !name) return {};
+        for (size_t i = 0; i <= pending->basename.size(); ++i) {
+            char value = 0;
+            if (!Read(name+i, &value, 1) || value != pending->basename.c_str()[i]) return {};
+        }
+        InnerAdmission admitted;
+        admitted.token = RequestToken(stream, pending->generation);
+        admitted.snapshot = pending->snapshot;
+        pending->innerAcquired = true;
+        return admitted;
+    } catch (...) { return {}; }
 }
 bool MatchesCoSave(void* handle) {
     TrackedGate lock(gate, gateOwned);
@@ -199,9 +201,10 @@ bool MatchesCoSave(void* handle) {
     _MESSAGE("SAVE_ADMISSION_COSAVE_HANDLE experimental=1 matched=%u", unsigned(match));
     return match;
 }
-void Finish(void* stream) {
+void Finish(const RequestToken& token) {
     TrackedGate lock(gate, gateOwned);
-    if (pending && pending->stream == stream) {
+    if (pending && token.stream && token.generation && pending->stream == token.stream &&
+        pending->generation == token.generation) {
         const auto generation = pending->generation;
         pending.reset();
         _MESSAGE("SAVE_ADMISSION_CONTEXT_RELEASE experimental=1 released=1 snapshot_readers_may_retain_lease=1 generation=%llu seq=%llu", generation, NextEvent());

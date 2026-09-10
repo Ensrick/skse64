@@ -303,17 +303,19 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 
 	g_loadGameLock.Enter();
 
-	Serialization::SetSaveName(saveName);
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-	if (LoadAdmissionRuntime::Enabled() && (!LoadAdmissionRuntime::OwnsStream(unk0) || !Serialization::PrepareAdmittedLoad(unk0))) {
+	LoadAdmissionRuntime::InnerAdmission admittedInner;
+	if (LoadAdmissionRuntime::Enabled()) admittedInner = LoadAdmissionRuntime::AcquireInner(unk0);
+	if (LoadAdmissionRuntime::Enabled() && (!admittedInner || !Serialization::PrepareAdmittedLoad(admittedInner.snapshot))) {
 		_MESSAGE("SAVE_ADMISSION_INNER refused=1 before_preload_and_engine_target=1");
-		Serialization::ClosePreparedLoad();
-		Serialization::SetSaveName(NULL);
-		LoadAdmissionRuntime::Finish(unk0);
+		// A failed bind does not own the existing prepared reader. In particular,
+		// do not close another invocation's snapshot when preparation is busy.
+		LoadAdmissionRuntime::Finish(admittedInner.token);
 		g_loadGameLock.Leave();
 		return false;
 	}
 #endif
+	Serialization::SetSaveName(saveName);
 	PluginManager::Dispatch_Message(0, SKSEMessagingInterface::kMessage_PreLoadGame, (void*)saveName, strlen(saveName), NULL);
 	// 1.7.104 passes a sixth ABI argument (including this), a byte in the
 	// caller's [rsp+28h]. The target reads it at entry-rsp+30h and uses it
@@ -329,7 +331,7 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	if (LoadAdmissionRuntime::Enabled()) {
 		Serialization::ClosePreparedLoad();
-		LoadAdmissionRuntime::Finish(unk0);
+		LoadAdmissionRuntime::Finish(admittedInner.token);
 	}
 #endif
 	if (traceLoadArguments)

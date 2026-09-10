@@ -4,6 +4,9 @@
 #include "skse64/GameTypes.h"
 
 #include <string>
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+#include "AdmittedSnapshot.h"
+#endif
 
 class GFxValue;
 
@@ -43,7 +46,7 @@ namespace Serialization
 	void	SetSaveName(const char * name);
 	std::string GetCoSavePath(const char* name);
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-	bool PrepareAdmittedLoad(void* stream);
+	bool PrepareAdmittedLoad(AdmittedSnapshot::Bytes snapshot);
 	void ClosePreparedLoad();
 #endif
 	bool	WriteRecord(UInt32 type, UInt32 version, const void * buf, UInt32 length);

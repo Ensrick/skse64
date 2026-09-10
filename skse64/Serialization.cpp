@@ -162,9 +162,9 @@ namespace Serialization
 
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	bool s_admittedFilePrepared = false;
-	bool PrepareAdmittedLoad(void* stream)
+	bool PrepareAdmittedLoad(AdmittedSnapshot::Bytes snapshot)
 	{
-		if (s_admittedFilePrepared || !s_currentFile.Bind(LoadAdmissionRuntime::SnapshotFor(stream))) return false;
+		if (s_admittedFilePrepared || !s_currentFile.Bind(std::move(snapshot))) return false;
 		s_admittedFilePrepared = true;
 		_MESSAGE("SAVE_ADMISSION_COSAVE_SNAPSHOT bound=1 bytes=%llu pathname_reopened=0", static_cast<UInt64>(s_currentFile.GetLength()));
 		return true;
