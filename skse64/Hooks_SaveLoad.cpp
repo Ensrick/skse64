@@ -8,10 +8,99 @@
 #include "GameMenus.h"
 #include "PapyrusVM.h"
 #include "PluginManager.h"
+#include "Hooks_UI.h"
+#include <atomic>
+#include <new>
 
 namespace {
 	// Diagnostic experiment only. Not installed unless explicitly opted in.
 	char g_rejectLoadBasename[260] = {};
+	bool g_recoverRejectedMainLoad = false;
+	thread_local bool g_rejectedRequestNeedsRecovery = false;
+	std::atomic<UInt64> g_loadRequestGeneration{0};
+	thread_local UInt64 g_rejectedRequestGeneration = 0;
+
+	bool InstallLoadRequestProbe(uintptr_t requestCall, uintptr_t failureCall,
+		uintptr_t requestHook, uintptr_t failureHook, bool recover)
+	{
+		// Write5Call consumes 14 trampoline bytes and asserts on exhaustion.
+		// Reserve capacity for the pair before making either diagnostic edit.
+		if (g_branchTrampoline.Remain() < (recover ? 28u : 14u)) {
+			_MESSAGE("LOAD_REQUEST_PROBE_NOT_INSTALLED trampoline_capacity=0");
+			return false;
+		}
+		if (recover && !g_branchTrampoline.Write5Call(failureCall, failureHook)) {
+			_MESSAGE("LOAD_REQUEST_PROBE_NOT_INSTALLED failure_hook_write_failed=1");
+			return false;
+		}
+		if (!g_branchTrampoline.Write5Call(requestCall, requestHook)) {
+			// A previously installed failure hook is inert: no request wrapper
+			// ran to set this thread's recovery flag. Keep forwarding native failure.
+			_MESSAGE("LOAD_REQUEST_PROBE_NOT_INSTALLED request_hook_write_failed=1 native_failure_forwarder_only=%u", unsigned(recover));
+			return false;
+		}
+		return true;
+	}
+
+	void NotifyOriginalLoadFailure()
+	{
+		static RelocAddr<void(*)()> original(0x00627B20);
+		original();
+	}
+
+	bool QueueRejectedMainLoadRecovery()
+	{
+		// Same factory, owned string field and UI queue as the native failure
+		// handler. Queue AFTER its RefreshMenu, never raw-close the Main Menu.
+		auto* menus = MenuManager::GetSingleton();
+		auto* queue = UIManager::GetSingleton();
+		BSFixedString mainMenu("Main Menu"), journalMenu("Journal Menu");
+		const bool eligible = menus && queue && menus->IsMenuOpen(&mainMenu)
+			&& !menus->IsMenuOpen(&journalMenu);
+		bool queued = false;
+		if (eligible) {
+			BSFixedString type("BSUIMessageData"), event("CancelLoading");
+			auto* data = static_cast<BSUIMessageData*>(CreateUIMessageData(&type));
+			if (data) {
+				CALL_MEMBER_FN(&data->unk18, Set_ref)(event);
+				CALL_MEMBER_FN(queue, AddMessage)(&mainMenu, 0, data); // kUpdate; queue owns data
+				queued = true;
+			}
+			event.Release();
+			type.Release();
+		}
+		journalMenu.Release();
+		mainMenu.Release();
+		return queued;
+	}
+
+	class RejectedLoadUIRecovery : public UIDelegate_v1
+	{
+	public:
+		explicit RejectedLoadUIRecovery(UInt64 generation) : generation_(generation) {}
+		void Run() override
+		{
+			const bool current = generation_ == g_loadRequestGeneration.load(std::memory_order_relaxed);
+			const bool queued = current && QueueRejectedMainLoadRecovery();
+			_MESSAGE("LOAD_REQUEST_RECOVERY_UI diagnostic_only=1 generation=%llu current=%u main_cancel_queued=%u",
+				generation_, unsigned(current), unsigned(queued));
+		}
+		void Dispose() override { delete this; }
+	private:
+		UInt64 generation_;
+	};
+
+	bool ScheduleRejectedMainLoadRecovery(UInt64 generation)
+	{
+		// ProcessCommands drains native failure UI events before running this
+		// delegate. Cancellation is then queued for the next native UI pass.
+		auto* queue = UIManager::GetSingleton();
+		if (!queue) return false;
+		auto* task = new (std::nothrow) RejectedLoadUIRecovery(generation);
+		if (!task) return false;
+		queue->QueueCommand(task);
+		return true;
+	}
 	bool ReadLoadProbeName(UInt64** input, char (&name)[260])
 	{
 		UInt64* stream = nullptr;
@@ -34,8 +123,24 @@ namespace {
 	}
 }
 
+// Paired call site625FFE, not a generic failure-handler detour. Consume only
+// this thread's deliberate rejection; ordinary engine failures remain native.
+void LoadRequestFailureRecovery_Hook()
+{
+	const bool recover = g_rejectedRequestNeedsRecovery;
+	const UInt64 generation = g_rejectedRequestGeneration;
+	g_rejectedRequestNeedsRecovery = false;
+	NotifyOriginalLoadFailure();
+	if (recover) {
+		const bool scheduled = ScheduleRejectedMainLoadRecovery(generation);
+		_MESSAGE("LOAD_REQUEST_RECOVERY diagnostic_only=1 native_failure_notified=1 deferred_ui_recovery=%u generation=%llu", unsigned(scheduled), generation);
+	}
+}
+
 bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UInt8 arg2, UInt8 arg3, UInt32 arg4)
 {
+	g_rejectedRequestNeedsRecovery = false;
+	g_rejectedRequestGeneration = g_loadRequestGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
 	char name[260] = {};
 	const bool readable = ReadLoadProbeName(stream, name);
 	const bool reject = g_rejectLoadBasename[0]
@@ -46,6 +151,7 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 		// Return to the existing caller at625FFA; it calls627B20 for false.
 		// This diagnostic deliberately does not enter627DE0 or emit SKSE load messages.
 		_MESSAGE("LOAD_REQUEST_REJECTED diagnostic_only=1 engine_target_entered=0");
+		g_rejectedRequestNeedsRecovery = g_recoverRejectedMainLoad;
 		return false;
 	}
 	const bool result = CALL_MEMBER_FN(this, LoadRequestProbe_Target)(stream, arg1, arg2, arg3, arg4);
@@ -201,10 +307,18 @@ void Hooks_SaveLoad_Commit(void)
 				|| c == '_' || c == '-' || c == '.';
 		}
 		RelocAddr<uintptr_t> requestCall(0x00625FF5);
+		RelocAddr<uintptr_t> failureCall(0x00625FFE);
 		const UInt8 expected[] = { 0xE8, 0xE6, 0x1D, 0x00, 0x00 };
-		if (valid && memcmp(reinterpret_cast<const void*>(requestCall.GetUIntPtr()), expected, sizeof(expected)) == 0) {
-			g_branchTrampoline.Write5Call(requestCall, GetFnAddr(&BGSSaveLoadManager::LoadRequestProbe_Hook));
-			_MESSAGE("LOAD_REQUEST_PROBE_INSTALLED diagnostic_only=1 reject_basename=%s", g_rejectLoadBasename);
+		const UInt8 failureExpected[] = { 0xE8, 0x1D, 0x1B, 0x00, 0x00 };
+		char recover[2] = {};
+		g_recoverRejectedMainLoad = GetEnvironmentVariableA("SKSE_AUTOMATION_RECOVER_REJECTED_LOAD", recover, sizeof(recover)) == 1 && recover[0] == '1';
+		if (valid && memcmp(reinterpret_cast<const void*>(requestCall.GetUIntPtr()), expected, sizeof(expected)) == 0
+			&& (!g_recoverRejectedMainLoad || memcmp(reinterpret_cast<const void*>(failureCall.GetUIntPtr()), failureExpected, sizeof(failureExpected)) == 0)) {
+			if (InstallLoadRequestProbe(requestCall, failureCall,
+				GetFnAddr(&BGSSaveLoadManager::LoadRequestProbe_Hook),
+				reinterpret_cast<uintptr_t>(&LoadRequestFailureRecovery_Hook), g_recoverRejectedMainLoad)) {
+				_MESSAGE("LOAD_REQUEST_PROBE_INSTALLED diagnostic_only=1 reject_basename=%s automatic_main_recovery=%u", g_rejectLoadBasename, unsigned(g_recoverRejectedMainLoad));
+			}
 		} else {
 			_MESSAGE("LOAD_REQUEST_PROBE_NOT_INSTALLED invalid_input_or_call_bytes=1");
 		}

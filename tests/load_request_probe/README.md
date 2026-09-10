@@ -28,12 +28,18 @@ cmake --build build-load-request-probe --config Release
 ctest --test-dir build-load-request-probe -C Release --output-on-failure
 ```
 
-The 524,288-case test compiles the production wrapper and both declarations,
+The 1,572,864-case test compiles the production wrapper and both declarations,
 covering both byte parameters, target results, exact case-insensitive rejection,
 nonmatching names and unreadable names under a configured rejection target.
 Mocks replace the memory reader, logging and engine target. It checks exact
 argument forwarding, no target invocation on rejection, unchanged caller data
-and exact result. It does NOT validate engine UI cancellation or gameplay.
+and exact result. It also checks that paired failure handling calls the original
+notifier first and consumes recovery eligibility once, only for our rejection.
+The 35 UI tests compile the actual factory/message helper and deferred task;
+they check menu eligibility, scoped string release and superseded generations.
+The 48 installation tests check capacity before either write, failure-hook-first
+ordering and unsuccessful return handling. Engine APIs are mocked; none of
+these tests validates engine UI cancellation, machine-code writes or gameplay.
 
 Fable 5.1 independent read-only review (session
 92cab6dd-ff89-4acb-8a42-ae21c423a9cc) confirmed the ABI and warned that the
@@ -48,3 +54,39 @@ reload tests. Main-menu Continue reached this hook and was rejected, but
 left an unusable CharacterSelection menu (Back/Cancel did not recover it).
 Therefore this diagnostic is NOT a production rejection mechanism. Passing
 the mock tests does not establish safe cancellation at this boundary.
+
+## Automatic main-menu recovery experiment
+
+Additional opt-in `SKSE_AUTOMATION_RECOVER_REJECTED_LOAD=1` checks original
+call bytes at625FFE (`E8 1D 1B 00 00`) and installs a paired failure wrapper.
+It calls the original627B20 first, then schedules a UI delegate only for this
+thread's deliberately rejected request. Native/unrelated failures stay native.
+The UI delegate runs after native UI event processing and queues the engine's
+`CancelLoading` kUpdate message for Main Menu only, with Journal closed.
+The owned `BSUIMessageData` string is populated using the engine's Set_ref.
+No raw menu close, engine flag write, sleep, or UI queue self-requeue is used.
+
+Why defer: immediate enqueue after627B20 restored native input flags but left
+the movie in CharacterSelection (PID29544). Deferred candidate16FA95D2 passed
+two normal Continue/reject/recover/navigation cycles in PID31576 and normal
+Quit to Desktop, controller0 at2026-09-09 23:14:10.772 CDT. Both log exact
+Adventurer3 `.ess`, reject=1, target_not_entered; no pre/post-load messages.
+No manual CancelLoading diagnostic, Back, or movie recovery invocation was
+needed. This is bounded MAIN MENU evidence, not gameplay preservation.
+
+Subsequent candidate D01E1C2A adds installation checks; local full build and
+tests pass, but that exact binary has NOT been runtime-tested or installed.
+The diagnostic checks available trampoline capacity (14 bytes per call)
+before either edit and checks Write5Call results. If the request edit fails
+after the failure edit succeeds, the latter merely forwards native failure.
+This is not an atomic transaction or a claim that SafeWriteBuf reports OS
+write errors: its interface returns void. Existing trampoline assertions and
+unrelated SKSE hooks are not redesigned here.
+
+A newer request invalidates a delegate before it runs. This does NOT establish
+protection against a request arriving after the cancel message is enqueued but
+before it is consumed. UI/request serialization and rapid overlapping requests
+need further investigation. Other outstanding gates: Journal and quickload
+rejection, valid load/save/reload after rejection, sustained gameplay, actual
+plugin/currency admission policy and useful in-game refusal explanation.
+Default installed SKSE remains CC2F98A4; no campaign repair is claimed.
