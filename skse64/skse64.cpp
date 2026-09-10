@@ -23,6 +23,9 @@
 #include "Hooks_DirectInput8Create.h"
 #include "Hooks_Diagnostics.h"
 #include "InternalSerialization.h"
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+#include "LoadStreamLifetime.h"
+#endif
 
 IDebugLog gLog;
 HINSTANCE g_moduleHandle = nullptr;
@@ -200,6 +203,10 @@ void SKSE64_Initialize(void)
 	Hooks_Data_Commit();
 	Init_CoreSerialization_Callbacks();
 	Hooks_DirectInput_Commit();
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	// Optional observer spends trampoline capacity only after mandatory hooks.
+	LoadStreamLifetime::Install();
+#endif
 		
 	FlushInstructionCache(GetCurrentProcess(), NULL, 0);
 

@@ -412,7 +412,7 @@ set(ENSRICK_SAVE_ADMISSION_SOURCE_DIR "" CACHE PATH "Experimental original admis
 if(ENSRICK_SAVE_ADMISSION_SOURCE_DIR)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     add_subdirectory("${ENSRICK_SAVE_ADMISSION_SOURCE_DIR}" ensrick-admission)
-    target_sources(skse64 PRIVATE LoadAdmissionRuntime.cpp)
+    target_sources(skse64 PRIVATE LoadAdmissionRuntime.cpp LoadStreamLifetime.cpp)
     target_compile_definitions(skse64 PRIVATE ENSRICK_EXPERIMENTAL_SAVE_ADMISSION=1)
     target_link_libraries(skse64 PRIVATE save_admission_abi)
 endif()

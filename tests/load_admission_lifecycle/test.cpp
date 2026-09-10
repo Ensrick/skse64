@@ -8,6 +8,11 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <thread>
+#include "../../skse64/LoadAdmissionRuntime.h"
+using LoadAdmissionRuntime::PendingObservation;
+using LoadAdmissionRuntime::TrackedGate;
 #define _MESSAGE(...) ((void)0)
 static unsigned checks, closes;
 static void Check(bool value) { ++checks; if (!value) throw std::runtime_error("lifecycle assertion failed"); }
@@ -15,10 +20,13 @@ struct Context {
     void* stream;
     std::string basename;
     void* lease;
+    std::uint64_t generation;
     ~Context() { ++closes; }
 };
 static std::unique_ptr<Context> pending;
 static std::mutex gate;
+static thread_local bool gateOwned = false;
+static std::atomic<std::uint64_t> events{0};
 struct Span { const char* pointer; size_t bytes; };
 static std::vector<Span> readable;
 static bool Read(const void* p, void* output, size_t bytes) {
@@ -45,7 +53,28 @@ int main() {
         char other[8] = {};
         const auto create = [&]() { pending.reset(new Context{stream, "TestSave.ess", stream}); };
         Check(!OwnsStream(stream));
+        const auto empty = ObservePending(stream);
+        Check(empty.acquired && !empty.present && !empty.matched && empty.generation == 0);
         create(); Check(OwnsStream(stream)); Check(!OwnsStream(other));
+        pending->generation = 42;
+        const auto matched = ObservePending(stream);
+        Check(matched.acquired && matched.present && matched.matched && matched.generation == 42);
+        Check(!ObservePending(other).matched && ObservePending(other).present);
+        {
+            TrackedGate owner(gate, gateOwned);
+            Check(gateOwned && !ObservePending(stream).acquired && closes == 0);
+        }
+        Check(!gateOwned && ObservePending(stream).matched);
+        std::atomic<bool> locked{false}, release{false};
+        std::thread holder([&] { std::lock_guard<std::mutex> hold(gate); locked.store(true); while (!release.load()) std::this_thread::yield(); });
+        while (!locked.load()) std::this_thread::yield();
+        const auto busy = ObservePending(stream);
+        release.store(true); holder.join();
+        Check(!busy.acquired && bool(pending) && closes == 0);
+        Check(empty.sequence > 0 && matched.sequence > empty.sequence);
+        Check(busy.sequence == 0);
+        const auto sequence = NextEvent();
+        Check(NextEvent() == sequence + 1);
         Check(MatchesCoSave(stream)); Check(!MatchesCoSave(other)); Check(!MatchesCoSave(nullptr));
         name[0] = 'X'; Check(!OwnsStream(stream)); name[0] = 'T';
         readable.pop_back(); Check(!OwnsStream(stream)); readable.push_back({name.c_str(), name.size()+1});

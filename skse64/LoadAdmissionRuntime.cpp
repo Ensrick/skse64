@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <atomic>
 
 namespace LoadAdmissionRuntime {
 namespace {
@@ -16,10 +17,13 @@ struct Context {
     void* stream = nullptr;
     std::string basename;
     ensrick_admission_lease* lease = nullptr;
+    std::uint64_t generation = 0;
     ~Context() { ensrick_admission_release(lease); }
 };
 std::mutex gate;
+thread_local bool gateOwned = false;
 std::unique_ptr<Context> pending;
+std::atomic<std::uint64_t> generations{0}, events{0};
 bool Read(const void* address, void* output, size_t size) {
     SIZE_T got = 0;
     return address && ReadProcessMemory(GetCurrentProcess(), address, output, size, &got) && got == size;
@@ -48,7 +52,7 @@ bool Enabled() {
 bool Begin(std::uint64_t** input) {
     if (!Enabled()) return true;
     try {
-        std::lock_guard<std::mutex> lock(gate);
+        TrackedGate lock(gate, gateOwned);
         if (pending) throw std::runtime_error("previous admitted load is still pending");
         std::uint64_t *stream = nullptr, vtable = 0, memory = 0;
         std::uint32_t size = 0, position = 0;
@@ -102,6 +106,9 @@ bool Begin(std::uint64_t** input) {
         if (status != ENSRICK_ADMISSION_OK) return false;
         next->stream = stream;
         next->basename = name;
+        next->generation = generations.fetch_add(1, std::memory_order_relaxed)+1;
+        _MESSAGE("SAVE_ADMISSION_CONTEXT generation=%llu stream=%016llX seq=%llu identity=pointer_only",
+            next->generation, static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(stream)), NextEvent());
         pending = std::move(next);
         return true;
     } catch (const std::exception& error) {
@@ -109,8 +116,23 @@ bool Begin(std::uint64_t** input) {
     } catch (...) { _MESSAGE("SAVE_ADMISSION experimental=1 refused=1 adapter_reason=unknown_exception"); }
     return false;
 }
+std::uint64_t NextEvent() noexcept { return events.fetch_add(1, std::memory_order_relaxed)+1; }
+PendingObservation ObservePending(void* stream) noexcept {
+    PendingObservation result;
+    if (gateOwned) return result;
+    try {
+        std::unique_lock<std::mutex> lock(gate, std::try_to_lock);
+        if (!lock.owns_lock()) return result;
+        result.acquired = true;
+        result.sequence = NextEvent(); // ordered with releases under the same gate
+        result.present = bool(pending);
+        result.matched = pending && pending->stream == stream;
+        result.generation = pending ? pending->generation : 0;
+    } catch (...) {} // failed observation is unknown, never "no pending load"
+    return result;
+}
 bool OwnsStream(void* stream) {
-    std::lock_guard<std::mutex> lock(gate);
+    TrackedGate lock(gate, gateOwned);
     if (!pending || pending->stream != stream) return false;
     // The buffer is legitimately decompressed between these hooks; its raw
     // byte count cannot be compared here. Name continuity adds a check but is
@@ -124,33 +146,35 @@ bool OwnsStream(void* stream) {
     return true;
 }
 bool MatchesCoSave(void* handle) {
-    std::lock_guard<std::mutex> lock(gate);
+    TrackedGate lock(gate, gateOwned);
     const bool match = pending && ensrick_admission_lease_matches_handle(pending->lease, handle);
     _MESSAGE("SAVE_ADMISSION_COSAVE_HANDLE experimental=1 matched=%u", unsigned(match));
     return match;
 }
 void Finish(void* stream) {
-    std::lock_guard<std::mutex> lock(gate);
+    TrackedGate lock(gate, gateOwned);
     if (pending && pending->stream == stream) {
+        const auto generation = pending->generation;
         pending.reset();
-        _MESSAGE("SAVE_ADMISSION_LEASE experimental=1 released=1");
+        _MESSAGE("SAVE_ADMISSION_LEASE experimental=1 released=1 generation=%llu seq=%llu", generation, NextEvent());
     }
 }
 void RequestReturned(void* admittedStream, void* callerStream, bool result) {
-    std::lock_guard<std::mutex> lock(gate);
+    TrackedGate lock(gate, gateOwned);
     if (!pending || pending->stream != admittedStream) return;
     if (callerStream == admittedStream) {
         // Pinned caller625FFA..626024 unconditionally destroys its remaining
         // nonnull stream, whether target returned true or false. No deferred
         // owner exists in this case. Release even after a pre-inner failure.
+        const auto generation = pending->generation;
         pending.reset();
-        _MESSAGE("SAVE_ADMISSION_LEASE experimental=1 released=1 caller_retained_terminal_stream=1 result=%u", unsigned(result));
+        _MESSAGE("SAVE_ADMISSION_LEASE experimental=1 released=1 caller_retained_terminal_stream=1 result=%u generation=%llu seq=%llu", unsigned(result), generation, NextEvent());
     } else {
         // 627FF2 clears the caller pointer when transferring to a callback.
         // Keep the lease until its inner load; cancellation/destruction of
         // that callback still needs coverage before production deployment.
-        _MESSAGE("SAVE_ADMISSION_PENDING experimental=1 outer_result=%u lease_retained=1 transferred=%u route_unverified=1",
-            unsigned(result), unsigned(callerStream == nullptr));
+        _MESSAGE("SAVE_ADMISSION_PENDING experimental=1 seq=%llu outer_result=%u lease_retained=1 transferred=%u route_unverified=1",
+            NextEvent(), unsigned(result), unsigned(callerStream == nullptr));
     }
 }
 }

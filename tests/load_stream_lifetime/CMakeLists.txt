@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(LoadStreamLifetimeTests LANGUAGES CXX)
+enable_testing()
+add_executable(load_stream_lifetime test.cpp)
+set_target_properties(load_stream_lifetime PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+add_test(NAME bounded_diagnostic_forwarding COMMAND load_stream_lifetime)
