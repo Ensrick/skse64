@@ -10,6 +10,7 @@
 #include <mutex>
 #include <vector>
 #include <atomic>
+#include <cstring>
 
 namespace LoadAdmissionRuntime {
 namespace {
@@ -52,6 +53,11 @@ bool Enabled() {
 bool Begin(std::uint64_t** input) {
     if (!Enabled()) return true;
     try {
+        // Engine Fixes installs this after SKSE initialization; inspect at each
+        // request, not while installing hooks. Without it, the achievements
+        // prompt can transfer ownership to an unverified deferred callback.
+        if (!HasSuppressedAchievementPrompt())
+            throw std::runtime_error("unsupported stack: Engine Fixes achievement-prompt suppression is absent; deferred admission is not supported");
         TrackedGate lock(gate, gateOwned);
         if (pending) throw std::runtime_error("previous admitted load is still pending");
         std::uint64_t *stream = nullptr, vtable = 0, memory = 0;
@@ -123,6 +129,19 @@ bool Begin(std::uint64_t** input) {
     return false;
 }
 std::uint64_t NextEvent() noexcept { return events.fetch_add(1, std::memory_order_relaxed)+1; }
+bool HasSuppressedAchievementPrompt() noexcept {
+    try {
+        // Pinned 1.7.104 ID441528. Engine Fixes: xor rax,rax; ret; INT3.
+        // This signature establishes only this entry's immediate return path.
+        const unsigned char expected[] = {0x48, 0x31, 0xC0, 0xC3, 0xCC};
+        unsigned char actual[sizeof(expected)] = {};
+        const bool readable = Read(reinterpret_cast<const void*>(RelocationManager::s_baseAddr + 0x1BFA00), actual, sizeof(actual));
+        const bool matched = readable && std::memcmp(actual, expected, sizeof(actual)) == 0;
+        _MESSAGE("SAVE_ADMISSION_ACHIEVEMENT_GATE supported=%u readable=%u bytes=%02X%02X%02X%02X%02X scope=achievement_prompt_only",
+            unsigned(matched), unsigned(readable), unsigned(actual[0]), unsigned(actual[1]), unsigned(actual[2]), unsigned(actual[3]), unsigned(actual[4]));
+        return matched;
+    } catch (...) { return false; }
+}
 AdmittedSnapshot::Bytes SnapshotFor(void* stream) noexcept {
     try {
         TrackedGate lock(gate, gateOwned);

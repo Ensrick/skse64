@@ -15,6 +15,8 @@ public:
     TrackedGate& operator=(const TrackedGate&) = delete;
 };
 bool Enabled();
+// Current modpack prerequisite only. Does not rule out other error callbacks.
+bool HasSuppressedAchievementPrompt() noexcept;
 bool Begin(std::uint64_t** stream);
 bool OwnsStream(void* stream);
 bool MatchesCoSave(void* handle);

@@ -31,7 +31,11 @@ static thread_local bool gateOwned = false;
 static std::atomic<std::uint64_t> events{0};
 struct Span { const char* pointer; size_t bytes; };
 static std::vector<Span> readable;
+struct RelocationManager { static std::uintptr_t s_baseAddr; };
+std::uintptr_t RelocationManager::s_baseAddr = 0;
+static bool throwRead = false;
 static bool Read(const void* p, void* output, size_t bytes) {
+    if (throwRead) throw std::runtime_error("synthetic reader failure");
     const auto address = reinterpret_cast<std::uintptr_t>(p);
     for (const auto& span : readable) {
         const auto start = reinterpret_cast<std::uintptr_t>(span.pointer);
@@ -46,6 +50,25 @@ static unsigned ensrick_admission_lease_matches_handle(void* lease, void* handle
 
 int main() {
     try {
+        std::vector<unsigned char> image(0x1BFA00+5, 0);
+        RelocationManager::s_baseAddr = reinterpret_cast<std::uintptr_t>(image.data());
+        auto* patched = image.data()+0x1BFA00;
+        const unsigned char signature[] = {0x48,0x31,0xC0,0xC3,0xCC};
+        std::memcpy(patched, signature, sizeof(signature));
+        Check(!HasSuppressedAchievementPrompt()); // unreadable, not zero-filled success
+        readable.push_back({reinterpret_cast<const char*>(patched), 5});
+        Check(HasSuppressedAchievementPrompt());
+        for (size_t i=0;i<5;++i) {
+            patched[i] ^= 1;
+            Check(!HasSuppressedAchievementPrompt());
+            patched[i] ^= 1;
+        }
+        const unsigned char native[] = {0x48,0x83,0xEC,0x28,0xC6};
+        std::memcpy(patched, native, sizeof(native));
+        Check(!HasSuppressedAchievementPrompt());
+        std::memcpy(patched, signature, sizeof(signature));
+        throwRead=true; Check(!HasSuppressedAchievementPrompt()); throwRead=false;
+        readable.pop_back();
         char stream[0xBB0+sizeof(void*)] = {};
         std::string name = "TestSave.ess";
         const char* text = name.c_str();

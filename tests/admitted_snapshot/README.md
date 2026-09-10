@@ -27,3 +27,13 @@ Remaining obligations: private engine tests, release packaging, native deferred
 ownership/cancellation, late stream-continuity failure cleanup, and clear in-game
 refusal feedback. Logging context release does NOT claim the underlying lease
 closed while another snapshot owner may retain it.
+
+Current-modpack prerequisite: experimental Begin checks the live Engine Fixes
+achievement-prompt suppression at each request (1.7.104 RVA1BFA00, ID441528;
+48 31 C0 C3 CC). Absence/read failure refuses at the early outer call before
+entering native loading or creating admission context. This avoids admitting
+the achievement-prompt deferred route without inventing cancellation semantics.
+It does NOT rule out other callbacks after native inner-load failure, nor prove
+the code span remains immutable after observation. Default/nonexperimental
+SKSE has no such restriction. Current fork lifecycle tests execute the actual
+reader, including original/mutated/unreadable/exception cases.
