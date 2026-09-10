@@ -26,12 +26,17 @@ struct Context {
     std::uint64_t generation;
     AdmittedSnapshot::Bytes snapshot;
     bool innerAcquired;
+    bool innerReturned;
+    bool outerInFlight;
+    bool awaitingResume;
     ~Context() { ++closes; }
 };
 static std::unique_ptr<Context> pending;
 static std::mutex gate;
 static thread_local bool gateOwned = false;
 static std::atomic<std::uint64_t> events{0};
+static std::atomic<std::uint64_t> generations{100};
+static std::atomic<bool> lifetimeFault{false};
 struct Span { const char* pointer; size_t bytes; };
 static std::vector<Span> readable;
 struct RelocationManager { static std::uintptr_t s_baseAddr; };
@@ -53,6 +58,9 @@ namespace LoadAdmissionRuntime {
 #include "lifecycle.inc"
 }
 using namespace LoadAdmissionRuntime;
+// Terminal caller simulation uses the real outer return path; inner completion
+// must no longer retire its stream before native deferred transfer is known.
+static void Finish(const RequestToken& token) { RequestReturned(token,token.stream,false); }
 
 int main() {
     try {
@@ -76,15 +84,17 @@ int main() {
         throwRead=true; Check(!HasSuppressedAchievementPrompt()); throwRead=false;
         readable.pop_back();
         char stream[0xBB0+sizeof(void*)] = {};
+        const auto streamVtable=RelocationManager::s_baseAddr+0x1B521A0;
+        std::memcpy(stream,&streamVtable,sizeof(streamVtable));
         std::string name = "TestSave.ess";
         const char* text = name.c_str();
         std::memcpy(stream+0xBB0, &text, sizeof(text));
         readable.push_back({stream, sizeof(stream)});
         readable.push_back({name.c_str(), name.size()+1});
         char other[8] = {};
-        std::uint64_t serial=100;
         const auto create = [&]() {
-            pending.reset(new Context{stream, "TestSave.ess", std::shared_ptr<void>(stream, [](void*){++leaseCloses;}), ++serial, {}, false});
+            lifetimeFault.store(false); // independent synthetic context/engine lifetime
+            pending.reset(new Context{stream, "TestSave.ess", std::shared_ptr<void>(stream, [](void*){++leaseCloses;}), ++generations, {}, false, false, true, false});
             pending->snapshot.owner=pending->lease;
             pending->snapshot.data=reinterpret_cast<const std::uint8_t*>(stream);
             pending->snapshot.size=sizeof(stream);
@@ -163,6 +173,7 @@ int main() {
         const auto newInner=AcquireInner(stream);
         Finish(oldInner.token); // stale inner cleanup must not release new context
         Check(pending && pending->generation==newInner.token.generation);
+        InnerReturned(oldInner.token,false); Check(pending->innerAcquired);
         Finish(RequestToken(stream,0)); Check(bool(pending));
         Finish(RequestToken(nullptr,newInner.token.generation)); Check(bool(pending));
         Finish(RequestToken(other,newInner.token.generation)); Check(bool(pending));
@@ -187,6 +198,47 @@ int main() {
         Check(bool(AcquireInner(stream)) && pending->innerAcquired);
         Check(!AcquireInner(stream));
         Finish(newInner.token); Check(!pending);
+        for(bool nativeResult : {false,true}) {
+            const auto request=create();
+            auto inner=AcquireInner(stream);
+            Check(bool(inner));
+            InnerReturned(request,nativeResult);
+            Check(pending && pending->innerReturned && !pending->innerAcquired);
+            Check(!AcquireInner(stream)); // not twice inside one outer call
+            RequestToken resumed;
+            Check(TryResume(stream,resumed)==ResumeAttempt::Refused && !resumed.generation);
+            RequestReturned(request,nullptr,nativeResult);
+            Check(pending && pending->awaitingResume && !pending->outerInFlight);
+            Check(TryResume(other,resumed)==ResumeAttempt::Refused);
+            name[0]='X'; Check(TryResume(stream,resumed)==ResumeAttempt::Refused); name[0]='T';
+            Check(TryResume(stream,resumed)==ResumeAttempt::Resumed && resumed.generation>request.generation);
+            RequestReturned(request,stream,true); Check(pending && pending->generation==resumed.generation);
+            Check(!pending->awaitingResume && pending->outerInFlight && !pending->innerReturned);
+            auto second=AcquireInner(stream);
+            Check(bool(second) && second.snapshot.owner==inner.snapshot.owner);
+            InnerReturned(resumed,true);
+            RequestReturned(resumed,stream,true);
+            Check(!pending); // ordinary caller terminal cleanup still works
+        }
+        const auto cancelled=create();
+        RequestReturned(cancelled,nullptr,true); // pre-inner callback transfer
+        StreamDestroying(other); Check(bool(pending));
+        StreamDestroying(stream); Check(!pending);
+        StreamDestroying(stream); Check(!pending);
+        const auto reused=create();
+        RequestReturned(cancelled,stream,false); Check(pending && pending->generation==reused.generation);
+        auto retained=AcquireInner(stream);
+        const auto beforeDestroyLease=leaseCloses;
+        StreamDestroying(stream); Check(!pending && leaseCloses==beforeDestroyLease);
+        retained={}; Check(leaseCloses==beforeDestroyLease+1);
+        InnerReturned(reused,false); Check(!pending);
+        create();
+        {TrackedGate heldGate(gate,gateOwned); StreamDestroying(stream);}
+        Check(lifetimeFault.load() && bool(pending)); // invariant violation poisons; never resume a potentially dead address
+        RequestToken refusedToken;
+        Check(!AcquireInner(stream) && TryResume(stream,refusedToken)==ResumeAttempt::Refused);
+        pending.reset(); lifetimeFault.store(false);
+        Check(TryResume(stream,refusedToken)==ResumeAttempt::NoPending);
         std::cout << checks << " actual lifecycle checks passed\n";
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

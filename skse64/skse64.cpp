@@ -207,7 +207,7 @@ void SKSE64_Initialize(void)
 	TextureReleaseFix::Install();
 	TextureReleaseFix::InstallProbe();
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
-	// Optional observer spends trampoline capacity only after mandatory hooks.
+	// Admission requires verified lifetime hooks; observation remains opt-in.
 	LoadStreamLifetime::Install();
 #endif
 		

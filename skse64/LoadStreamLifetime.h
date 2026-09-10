@@ -35,5 +35,6 @@ auto ObserveThenForward(Observer observer, Original original, Args... args)
     return original(args...);
 }
 
-void Install(); // Experimental build + explicit environment opt-in only.
+bool Ready() noexcept; // Both live detours and forwarders must still match.
+void Install(); // Experimental build; mandatory when admission is enabled.
 }

@@ -52,7 +52,7 @@ InnerAdmission AcquireInner(void* stream) noexcept {
     result.snapshot.size=8;
     return result;
 }
-void Finish(const RequestToken& token){if(token.generation) {Check(token.stream==expectedStream);finished=token.generation;}}
+void InnerReturned(const RequestToken& token,bool){if(token.generation) {Check(token.stream==expectedStream);finished=token.generation;}}
 }
 namespace SKSEMessagingInterface { enum { kMessage_PreLoadGame, kMessage_PostLoadGame }; }
 namespace PluginManager {

@@ -310,7 +310,7 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 		_MESSAGE("SAVE_ADMISSION_INNER refused=1 before_preload_and_engine_target=1");
 		// A failed bind does not own the existing prepared reader. In particular,
 		// do not close another invocation's snapshot when preparation is busy.
-		LoadAdmissionRuntime::Finish(admittedInner.token);
+		LoadAdmissionRuntime::InnerReturned(admittedInner.token, false);
 		g_loadGameLock.Leave();
 		return false;
 	}
@@ -331,7 +331,7 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	if (LoadAdmissionRuntime::Enabled()) {
 		Serialization::ClosePreparedLoad();
-		LoadAdmissionRuntime::Finish(admittedInner.token);
+		LoadAdmissionRuntime::InnerReturned(admittedInner.token, result);
 	}
 #endif
 	if (traceLoadArguments)

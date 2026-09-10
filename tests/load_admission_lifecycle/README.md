@@ -10,7 +10,7 @@ cmake --build build-admission-lifecycle --config Release
 ctest --test-dir build-admission-lifecycle -C Release --output-on-failure
 ```
 
-92 checks cover prerequisite signatures, bounded name continuity, gate/reentry
+127 checks cover diagnostic signatures, bounded name continuity, gate/reentry
 observation, event order, co-save identity, caller-retained versus transferred
 streams, snapshot ownership, and stale outer-request tokens. The stale-token
 regression failed the pointer-only implementation: request A finished, request
@@ -25,9 +25,10 @@ Begin's full Windows validation is not mocked here as evidence of real parsing;
 the runtime build and controlled copied-save tests remain separate obligations.
 
 The inner entry now atomically captures a generation token and owned snapshot
-after bounded name validation. Each context permits one inner acquisition;
-Finish requires that token. A stale-inner regression failed pointer-only Finish
-and passes with the generation check. Old snapshot ownership survives context
+after bounded name validation. Each outer invocation permits one inner acquisition;
+InnerReturned requires that token but retains the lease until outer ownership
+or native destruction is known. A stale-inner regression failed pointer-only
+cleanup and passes with the generation check. Old snapshot ownership survives context
 replacement without borrowing the new lease. Tests also reject absent, invalid,
 already consumed or unreadable inputs without claiming them.
 
@@ -40,8 +41,20 @@ checks both native results, runtime opt-out, exactly one native call, sixth-arg
 forwarding, paired Pre/PostLoad and balanced lock entry/exit. Native callbacks,
 memory ownership and the reader itself are synthetic, not gameplay proof.
 
-This is **not** complete ABA protection before inner acquisition. The initial
-stream address/name still depends on native allocation lifetime assumptions.
-Destruction coverage, deferred resumes, callback cancellation, and production
-admission deployment remain unresolved. No timeout/address polling or fail-open
-fallback is introduced by the token change.
+Deferred transfer marks the context resumable only after the outer invocation
+returns with a null caller pointer. A same-live-stream/name/vtable retry receives
+a new generation and the retained immutable snapshot, never a reread of consumed
+ESS bytes. It permits another single inner acquisition. Synchronous derived
+destruction retires a matching context before freeing/reusing its address;
+existing reader owners may keep only their own immutable byte leases alive.
+An unexpected destructor under the gate permanently poisons admission for the
+process, rather than deadlocking or later trusting a potentially reused address.
+
+Tests cover native true/false results, pre-inner callback cancellation, retry,
+old outer/inner tokens after retry, name mismatch, unknown pointers, reader
+ownership through destruction, and gate-owned invariant failure. Mandatory live
+detour and forwarder verification has its own 222-check actual-source suite in
+load_stream_lifetime. The source implementation is still experimental until
+native callback cancel/resume execution and packaging are verified. These tests
+do not certify arbitrary foreign native calls bypassing both derived destructors,
+nor prove whole-game stability. No timeout or post-free address polling is used.

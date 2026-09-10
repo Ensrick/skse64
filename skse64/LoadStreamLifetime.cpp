@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Observation only: never releases a lease, changes a load result or edits saves.
+// Opt-in observation and mandatory pre-destruction retirement for admission.
 #include "LoadStreamLifetime.h"
 #include "LoadAdmissionRuntime.h"
 #include "skse64_common/Relocation.h"
@@ -15,6 +15,8 @@ using NondeletingFn = void*(*)(void*);
 ScalarFn originalScalar = nullptr;
 NondeletingFn originalNondeleting = nullptr;
 std::atomic<std::uint64_t> observations{0};
+std::atomic<bool> installedPair{false};
+bool observationEnabled=false;
 
 bool Read(const void* address, void* out, std::size_t size) {
     SIZE_T got = 0;
@@ -22,6 +24,7 @@ bool Read(const void* address, void* out, std::size_t size) {
 }
 
 void ObserveCpp(void* stream, unsigned flags, const char* site) {
+    if(!observationEnabled) return;
     if (observations.load(std::memory_order_relaxed) > MaxEvents) return;
     const auto number = observations.fetch_add(1, std::memory_order_relaxed) + 1;
     if (EmitExhaustion(number)) {
@@ -51,10 +54,20 @@ void ObserveSafe(void* stream, unsigned flags, const char* site) noexcept {
     SetLastError(previousError);
 }
 void* ScalarHook(void* self, unsigned flags) {
-    return ObserveThenForward([=] { ObserveSafe(self, flags, "scalar_159D3E0"); }, originalScalar, self, flags);
+    return ObserveThenForward([=] {
+        const DWORD previousError=GetLastError();
+        ObserveSafe(self, flags, "scalar_159D3E0");
+        if(installedPair.load() && LoadAdmissionRuntime::Enabled()) LoadAdmissionRuntime::StreamDestroying(self);
+        SetLastError(previousError);
+    }, originalScalar, self, flags);
 }
 void* NondeletingHook(void* self) {
-    return ObserveThenForward([=] { ObserveSafe(self, 0, "nondeleting_159D320"); }, originalNondeleting, self);
+    return ObserveThenForward([=] {
+        const DWORD previousError=GetLastError();
+        ObserveSafe(self, 0, "nondeleting_159D320");
+        if(installedPair.load() && LoadAdmissionRuntime::Enabled()) LoadAdmissionRuntime::StreamDestroying(self);
+        SetLastError(previousError);
+    }, originalNondeleting, self);
 }
 void* Forwarder(std::uintptr_t entry) {
     unsigned char bytes[20];
@@ -64,11 +77,40 @@ void* Forwarder(std::uintptr_t entry) {
     FlushInstructionCache(GetCurrentProcess(), target, sizeof(bytes));
     return target;
 }
+
+template<std::size_t N>
+bool Verify(std::uintptr_t entry,std::uintptr_t hook,std::uintptr_t forwarder,const unsigned char(&prefix)[N]) {
+    unsigned char current[N]={},stub[14]={},forward[20]={},expectedForward[20]={};
+    if(!Read(reinterpret_cast<void*>(entry),current,N) || current[0]!=0xE9 ||
+        std::memcmp(current+5,prefix+5,N-5)) return false;
+    std::int32_t offset=0;
+    std::memcpy(&offset,current+1,4);
+    const auto destination=entry+5+static_cast<std::intptr_t>(offset);
+    if(!Read(reinterpret_cast<void*>(destination),stub,sizeof(stub))) return false;
+    const unsigned char jump[]={0xFF,0x25,0,0,0,0};
+    std::uint64_t target=0;
+    std::memcpy(&target,stub+6,8);
+    if(std::memcmp(stub,jump,6) || target!=hook) return false;
+    EncodeForwarder(expectedForward,prefix,entry+6);
+    return Read(reinterpret_cast<void*>(forwarder),forward,sizeof(forward)) &&
+        !std::memcmp(forward,expectedForward,sizeof(forward));
+}
+}
+
+bool Ready() noexcept {
+    if(!installedPair.load()) return false;
+    try {
+        return Verify(RelocationManager::s_baseAddr+ScalarRva,reinterpret_cast<std::uintptr_t>(ScalarHook),
+            reinterpret_cast<std::uintptr_t>(originalScalar),ScalarPrefix) &&
+            Verify(RelocationManager::s_baseAddr+NondeletingRva,reinterpret_cast<std::uintptr_t>(NondeletingHook),
+            reinterpret_cast<std::uintptr_t>(originalNondeleting),NondeletingPrefix);
+    } catch(...) { return false; }
 }
 
 void Install() {
     char enabled[2] = {};
-    if (GetEnvironmentVariableA("SKSE_AUTOMATION_LOAD_STREAM_LIFETIME_PROBE", enabled, sizeof(enabled)) != 1 || enabled[0] != '1') return;
+    observationEnabled=GetEnvironmentVariableA("SKSE_AUTOMATION_LOAD_STREAM_LIFETIME_PROBE", enabled, sizeof(enabled)) == 1 && enabled[0] == '1';
+    if(!observationEnabled && !LoadAdmissionRuntime::Enabled()) return;
     const auto scalar = RelocationManager::s_baseAddr+ScalarRva;
     const auto nondeleting = RelocationManager::s_baseAddr+NondeletingRva;
     unsigned char a[sizeof(ScalarPrefix)] = {}, b[sizeof(NondeletingPrefix)] = {};
@@ -85,7 +127,11 @@ void Install() {
     const bool nondeletingSet = g_branchTrampoline.Write5Branch(nondeleting, reinterpret_cast<std::uintptr_t>(NondeletingHook));
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(scalar), 6);
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(nondeleting), 6);
-    _MESSAGE("LOAD_STREAM_LIFETIME_PROBE diagnostic_only=1 installed_scalar=%u installed_nondeleting=%u complete_pair=%u base_hooked=0 max_events=%u",
-        unsigned(scalarSet), unsigned(nondeletingSet), unsigned(scalarSet && nondeletingSet), MaxEvents);
+    installedPair.store(scalarSet && nondeletingSet);
+    const bool verified=Ready();
+    installedPair.store(verified);
+    _MESSAGE("LOAD_STREAM_LIFETIME_PROBE observation=%u admission_cleanup=%u installed_scalar=%u installed_nondeleting=%u complete_pair=%u base_hooked=0 max_events=%u",
+        unsigned(observationEnabled),unsigned(LoadAdmissionRuntime::Enabled() && verified),
+        unsigned(scalarSet), unsigned(nondeletingSet), unsigned(verified), MaxEvents);
 }
 }

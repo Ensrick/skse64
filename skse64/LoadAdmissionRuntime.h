@@ -16,7 +16,7 @@ public:
     TrackedGate& operator=(const TrackedGate&) = delete;
 };
 bool Enabled();
-// Current modpack prerequisite only. Does not rule out other error callbacks.
+// Read-only diagnostic. Does not rule out other error callbacks.
 bool HasSuppressedAchievementPrompt() noexcept;
 // Captured under the context gate by Begin, before entering native code.
 // A raw address alone cannot identify an old request after allocator reuse.
@@ -35,8 +35,12 @@ struct InnerAdmission {
 // This does not prove allocation identity before acquisition after a deferred
 // cancellation: native lifetime coverage remains a production prerequisite.
 InnerAdmission AcquireInner(void* stream) noexcept;
+enum class ResumeAttempt { NoPending, Resumed, Refused };
+ResumeAttempt TryResume(void* stream, RequestToken& token) noexcept;
+void InnerReturned(const RequestToken& token, bool result);
+// Called synchronously before the real derived destructor, never after free.
+void StreamDestroying(void* stream) noexcept;
 bool MatchesCoSave(void* handle);
-void Finish(const RequestToken& token);
 void RequestReturned(const RequestToken& admitted, void* callerStream, bool result);
 struct PendingObservation {
     bool acquired = false;

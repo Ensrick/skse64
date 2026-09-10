@@ -5,6 +5,7 @@
 #include "GameData.h"
 #include "Serialization.h"
 #include "LoadPluginSnapshot.h"
+#include "LoadStreamLifetime.h"
 #include "skse64_common/Utilities.h"
 #include <memory>
 #include <mutex>
@@ -27,11 +28,15 @@ struct Context {
     std::uint64_t generation = 0;
     AdmittedSnapshot::Bytes snapshot;
     bool innerAcquired = false;
+    bool innerReturned = false;
+    bool outerInFlight = true;
+    bool awaitingResume = false;
 };
 std::mutex gate;
 thread_local bool gateOwned = false;
 std::unique_ptr<Context> pending;
 std::atomic<std::uint64_t> generations{0}, events{0};
+std::atomic<bool> lifetimeFault{false};
 bool Read(const void* address, void* output, size_t size) {
     SIZE_T got = 0;
     return address && ReadProcessMemory(GetCurrentProcess(), address, output, size, &got) && got == size;
@@ -63,12 +68,22 @@ bool Begin(std::uint64_t** input, RequestToken& admitted, LoadRefusal::Notice& r
     if (!Enabled()) return true;
     refused = LoadRefusal::Notice(LoadRefusal::AdapterFailure);
     try {
-        // Engine Fixes installs this after SKSE initialization; inspect at each
-        // request, not while installing hooks. Without it, the achievements
-        // prompt can transfer ownership to an unverified deferred callback.
-        if (!HasSuppressedAchievementPrompt()) {
+        if (lifetimeFault.load() || !LoadStreamLifetime::Ready()) {
             refused=LoadRefusal::Notice(LoadRefusal::UnsupportedStack);
-            throw std::runtime_error("unsupported stack: Engine Fixes achievement-prompt suppression is absent; deferred admission is not supported");
+            throw std::runtime_error("save stream lifetime coverage unavailable");
+        }
+        // Record Engine Fixes' independent achievement prompt patch. Mandatory
+        // stream lifetime coverage now protects transferred callback ownership;
+        // absence of this patch is no longer an admission bypass or veto.
+        HasSuppressedAchievementPrompt();
+        std::uint64_t* resumeStream = nullptr;
+        if (!Read(input, &resumeStream, sizeof(resumeStream)))
+            throw std::runtime_error("unreadable caller stream");
+        const auto resume = TryResume(resumeStream, admitted);
+        if (resume == ResumeAttempt::Resumed) { refused=LoadRefusal::Notice(); return true; }
+        if (resume == ResumeAttempt::Refused) {
+            refused=LoadRefusal::Notice(LoadRefusal::PreviousPending);
+            throw std::runtime_error("pending load is not an owned deferred resume");
         }
         TrackedGate lock(gate, gateOwned);
         if (pending) {
@@ -109,6 +124,7 @@ bool Begin(std::uint64_t** input, RequestToken& admitted, LoadRefusal::Notice& r
         typedef std::uint64_t (*Getter)();
         const auto getter = module ? reinterpret_cast<Getter>(GetProcAddress(module, "EnsrickCurrency_GetAdmissionFingerprintV1")) : nullptr;
         const auto fingerprint = getter ? getter() : 0;
+        if (lifetimeFault.load()) throw std::runtime_error("save lifetime invariant failed during validation");
         const auto path = Wide(Serialization::GetCoSavePath(name));
         const std::vector<uint16_t> pathUnits(path.begin(), path.end());
         ensrick_admission_request request = {};
@@ -146,6 +162,58 @@ bool Begin(std::uint64_t** input, RequestToken& admitted, LoadRefusal::Notice& r
     return false;
 }
 std::uint64_t NextEvent() noexcept { return events.fetch_add(1, std::memory_order_relaxed)+1; }
+bool PendingNameMatches(void* stream) {
+    if (!stream || !pending || pending->stream != stream) return false;
+    const char* name = nullptr;
+    std::uint64_t vtable=0;
+    if (!Read(stream,&vtable,sizeof(vtable)) || vtable!=RelocationManager::s_baseAddr+0x1B521A0 ||
+        !Read(static_cast<const char*>(stream)+0xBB0,&name,sizeof(name)) || !name) return false;
+    for(size_t i=0;i<=pending->basename.size();++i) {
+        char value=0;
+        if(!Read(name+i,&value,1) || value!=pending->basename.c_str()[i]) return false;
+    }
+    return true;
+}
+ResumeAttempt TryResume(void* stream, RequestToken& token) noexcept {
+    token={};
+    try {
+        TrackedGate lock(gate,gateOwned);
+        if(lifetimeFault.load()) return ResumeAttempt::Refused;
+        if(!pending) return ResumeAttempt::NoPending;
+        if(!pending->generation || !pending->awaitingResume || pending->outerInFlight ||
+            pending->innerAcquired || !PendingNameMatches(stream)) return ResumeAttempt::Refused;
+        pending->outerInFlight=true;
+        pending->awaitingResume=false;
+        pending->innerReturned=false;
+        // A queued retry is a new outer invocation even though it owns the
+        // same live stream and immutable lease. Old return tokens stay stale.
+        pending->generation=generations.fetch_add(1,std::memory_order_relaxed)+1;
+        token=RequestToken(stream,pending->generation);
+        _MESSAGE("SAVE_ADMISSION_RESUME generation=%llu seq=%llu retained_snapshot=1 engine_cursor_untouched=1",token.generation,NextEvent());
+        return ResumeAttempt::Resumed;
+    } catch(...) { return ResumeAttempt::Refused; }
+}
+void InnerReturned(const RequestToken& token,bool result) {
+    TrackedGate lock(gate,gateOwned);
+    if(!pending || !token.generation || pending->stream!=token.stream || pending->generation!=token.generation) return;
+    if(!pending->innerAcquired || !pending->outerInFlight) { lifetimeFault.store(true); return; }
+    pending->innerAcquired=false;
+    pending->innerReturned=true;
+    _MESSAGE("SAVE_ADMISSION_INNER_RETURN generation=%llu seq=%llu result=%u lease_retained_until_outer_or_destroy=1",token.generation,NextEvent(),unsigned(result));
+}
+void StreamDestroying(void* stream) noexcept {
+    // A gate holder must not call native destruction. Never deadlock or admit
+    // a reused address if a foreign callback violates this invariant.
+    if(gateOwned) { lifetimeFault.store(true); return; }
+    try {
+        TrackedGate lock(gate,gateOwned);
+        if(pending && pending->stream==stream) {
+            const auto generation=pending->generation;
+            pending.reset();
+            _MESSAGE("SAVE_ADMISSION_DESTROY generation=%llu seq=%llu before_native_destructor=1",generation,NextEvent());
+        }
+    } catch(...) { lifetimeFault.store(true); }
+}
 bool HasSuppressedAchievementPrompt() noexcept {
     try {
         // Pinned 1.7.104 ID441528. Engine Fixes: xor rax,rax; ret; INT3.
@@ -176,18 +244,14 @@ PendingObservation ObservePending(void* stream) noexcept {
 InnerAdmission AcquireInner(void* stream) noexcept {
     try {
         TrackedGate lock(gate, gateOwned);
-        if (!stream || !pending || pending->innerAcquired || !pending->generation || pending->stream != stream ||
+        if (lifetimeFault.load() || !stream || !pending || pending->innerAcquired || pending->innerReturned ||
+            !pending->outerInFlight || !pending->generation || pending->stream != stream ||
             !pending->snapshot.owner || !pending->snapshot.data || !pending->snapshot.size ||
             pending->snapshot.size > AdmittedSnapshot::MaximumBytes) return {};
         // The buffer is legitimately decompressed between these hooks; its raw
         // byte count cannot be compared here. Name continuity adds a check but is
         // NOT proof against ABA reuse after an unobserved async cancellation.
-        const char* name = nullptr;
-        if (!Read(static_cast<const char*>(stream)+0xBB0, &name, sizeof(name)) || !name) return {};
-        for (size_t i = 0; i <= pending->basename.size(); ++i) {
-            char value = 0;
-            if (!Read(name+i, &value, 1) || value != pending->basename.c_str()[i]) return {};
-        }
+        if(!PendingNameMatches(stream)) return {};
         InnerAdmission admitted;
         admitted.token = RequestToken(stream, pending->generation);
         admitted.snapshot = pending->snapshot;
@@ -200,15 +264,6 @@ bool MatchesCoSave(void* handle) {
     const bool match = pending && ensrick_admission_lease_matches_handle(pending->lease.get(), handle);
     _MESSAGE("SAVE_ADMISSION_COSAVE_HANDLE experimental=1 matched=%u", unsigned(match));
     return match;
-}
-void Finish(const RequestToken& token) {
-    TrackedGate lock(gate, gateOwned);
-    if (pending && token.stream && token.generation && pending->stream == token.stream &&
-        pending->generation == token.generation) {
-        const auto generation = pending->generation;
-        pending.reset();
-        _MESSAGE("SAVE_ADMISSION_CONTEXT_RELEASE experimental=1 released=1 snapshot_readers_may_retain_lease=1 generation=%llu seq=%llu", generation, NextEvent());
-    }
 }
 void RequestReturned(const RequestToken& admitted, void* callerStream, bool result) {
     void* admittedStream = admitted.stream;
@@ -227,9 +282,12 @@ void RequestReturned(const RequestToken& admitted, void* callerStream, bool resu
         _MESSAGE("SAVE_ADMISSION_CONTEXT_RELEASE experimental=1 released=1 snapshot_readers_may_retain_lease=1 caller_retained_terminal_stream=1 result=%u generation=%llu seq=%llu", unsigned(result), generation, NextEvent());
     } else {
         // 627FF2 clears the caller pointer when transferring to a callback.
-        // Keep the lease until its inner load; cancellation/destruction of
-        // that callback still needs coverage before production deployment.
-        _MESSAGE("SAVE_ADMISSION_PENDING experimental=1 seq=%llu outer_result=%u lease_retained=1 transferred=%u route_unverified=1",
+        // Keep the lease until resumed outer completion or the mandatory
+        // pre-destruction hook retires a cancelled native owner.
+        pending->outerInFlight=false;
+        pending->awaitingResume=callerStream==nullptr && !pending->innerAcquired;
+        if(callerStream!=nullptr || pending->innerAcquired) lifetimeFault.store(true);
+        _MESSAGE("SAVE_ADMISSION_PENDING experimental=1 seq=%llu outer_result=%u lease_retained=1 transferred=%u",
             NextEvent(), unsigned(result), unsigned(callerStream == nullptr));
     }
 }
