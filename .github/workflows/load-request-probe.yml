@@ -6,6 +6,8 @@ on:
       - 'skse64/GameData.h'
       - 'skse64/LoadPluginSnapshot.h'
       - 'skse64/LoadAdmissionRuntime.*'
+      - 'skse64/PapyrusMemberGuard.*'
+      - 'tests/papyrus_member_guard/**'
       - 'tests/load_admission_lifecycle/**'
       - 'tests/plugin_snapshot/**'
       - 'tests/load_request_probe/**'
@@ -16,6 +18,8 @@ on:
       - 'skse64/GameData.h'
       - 'skse64/LoadPluginSnapshot.h'
       - 'skse64/LoadAdmissionRuntime.*'
+      - 'skse64/PapyrusMemberGuard.*'
+      - 'tests/papyrus_member_guard/**'
       - 'tests/load_admission_lifecycle/**'
       - 'tests/plugin_snapshot/**'
       - 'tests/load_request_probe/**'
@@ -41,3 +45,6 @@ jobs:
       - run: cmake -S tests/load_admission_lifecycle -B build-admission-lifecycle
       - run: cmake --build build-admission-lifecycle --config Release
       - run: ctest --test-dir build-admission-lifecycle -C Release --output-on-failure
+      - run: cmake -S tests/papyrus_member_guard -B build-member-guard
+      - run: cmake --build build-member-guard --config Release
+      - run: ctest --test-dir build-member-guard -C Release --output-on-failure

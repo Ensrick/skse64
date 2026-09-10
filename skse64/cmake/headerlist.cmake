@@ -1,4 +1,5 @@
 set(headers
+	PapyrusMemberGuard.h
 	BSModelDB.h
 	Colors.h
 	CustomMenu.h

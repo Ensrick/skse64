@@ -8,6 +8,7 @@
 #include "PapyrusEvents.h"
 #include "PapyrusDelayFunctors.h"
 #include "Serialization.h"
+#include "PapyrusMemberGuard.h"
 
 #include "PapyrusSKSE.h"
 #include "PapyrusMath.h"
@@ -344,6 +345,7 @@ void Hooks_Papyrus_Init()
 
 void Hooks_Papyrus_Commit()
 {
+	PapyrusMemberGuard::Install();
 	g_branchTrampoline.Write5Call(RegisterPapyrusFunctions_Start, (uintptr_t)RegisterPapyrusFunctions_Hook);
 
 	// GlobalData / event regs

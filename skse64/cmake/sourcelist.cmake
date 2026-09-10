@@ -1,4 +1,5 @@
 set(sources
+	PapyrusMemberGuard.cpp
 	BSModelDB.cpp
 	Colors.cpp
 	CustomMenu.cpp

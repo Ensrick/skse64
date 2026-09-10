@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(PapyrusMemberGuardTests LANGUAGES CXX)
+enable_testing()
+add_executable(member_guard test.cpp)
+set_target_properties(member_guard PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+add_test(NAME native_member_bounds COMMAND member_guard)
