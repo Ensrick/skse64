@@ -28,6 +28,7 @@ static UInt64** expectedStream;
 static UInt32 expected1, expected4;
 static UInt8 expected2, expected3;
 static unsigned calls;
+static void ObserveLoadStreamSnapshot(UInt64**) {} // independent Windows fixture test
 static const char* sourceName;
 static void require(bool pass) { if (!pass) throw std::runtime_error("probe contract failed"); }
 static bool ReadLoadProbeName(UInt64** stream, char (&name)[260]) {

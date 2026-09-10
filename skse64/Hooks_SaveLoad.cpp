@@ -121,6 +121,56 @@ namespace {
 		name[sizeof(name) - 1] = 0;
 		return false;
 	}
+
+	void ObserveLoadStreamSnapshot(UInt64** input)
+	{
+		// Opt-in, read-only experiment for pinned 1.7.104 Win32FileType.
+		// This stream consumes an in-memory ESS image, not NiFile::file.
+		// Never call an unknown virtual, change a cursor, or dump player data.
+		char enabled[2] = {};
+		if (GetEnvironmentVariableA("SKSE_AUTOMATION_LOAD_STREAM_PROBE", enabled, sizeof(enabled)) != 1 || enabled[0] != '1') return;
+		UInt64* stream = nullptr;
+		UInt64 vtable = 0, memory = 0;
+		UInt32 size = 0, position = 0;
+		UInt8 decompressed = 255;
+		char path[260] = {};
+		auto read = [](const void* source, void* dest, SIZE_T length) {
+			SIZE_T got = 0;
+			return ReadProcessMemory(GetCurrentProcess(), source, dest, length, &got) && got == length;
+		};
+		if (!input || !read(input, &stream, sizeof(stream)) || !stream || !read(stream, &vtable, sizeof(vtable))
+			|| vtable != RelocationManager::s_baseAddr + 0x01B521A0) {
+			_MESSAGE("LOAD_STREAM_SNAPSHOT diagnostic_only=1 layout_match=0");
+			return;
+		}
+		auto field = [stream](size_t offset) { return reinterpret_cast<const char*>(stream) + offset; };
+		if (!read(field(0xBD0), &memory, sizeof(memory)) || !read(field(0x174), &size, sizeof(size))
+			|| !read(field(0xBE0), &position, sizeof(position)) || !read(field(0xBCA), &decompressed, sizeof(decompressed))
+			|| !read(field(0x64), path, sizeof(path)) || !memchr(path, 0, sizeof(path))
+			|| !memory || !size || size > 0x04000000 || decompressed != 0) {
+			_MESSAGE("LOAD_STREAM_SNAPSHOT diagnostic_only=1 layout_match=1 fields_valid=0 bytes=%u position=%u decompressed=%u", size, position, unsigned(decompressed));
+			return;
+		}
+		HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+		if (file == INVALID_HANDLE_VALUE) {
+			_MESSAGE("LOAD_STREAM_SNAPSHOT diagnostic_only=1 file_open=0 error=%u bytes=%u position=%u", GetLastError(), size, position);
+			return;
+		}
+		LARGE_INTEGER fileSize = {};
+		bool equal = GetFileSizeEx(file, &fileSize) && fileSize.QuadPart == size;
+		UInt32 compared = 0;
+		unsigned char disk[4096], engine[4096];
+		while (equal && compared < size) {
+			DWORD amount = (size - compared < sizeof(disk)) ? size - compared : sizeof(disk), got = 0;
+			equal = ReadFile(file, disk, amount, &got, nullptr) && got == amount
+				&& read(reinterpret_cast<const void*>(memory + compared), engine, amount)
+				&& memcmp(disk, engine, amount) == 0;
+			if (equal) compared += amount;
+		}
+		CloseHandle(file);
+		_MESSAGE("LOAD_STREAM_SNAPSHOT diagnostic_only=1 layout_match=1 fields_valid=1 file_open=1 bytes=%u disk_bytes=%llu position=%u decompressed=%u compared=%u exact_equal=%u",
+			size, static_cast<UInt64>(fileSize.QuadPart), position, unsigned(decompressed), compared, unsigned(equal));
+	}
 }
 
 // Paired call site625FFE, not a generic failure-handler detour. Consume only
@@ -143,6 +193,7 @@ bool BGSSaveLoadManager::LoadRequestProbe_Hook(UInt64** stream, UInt32 arg1, UIn
 	g_rejectedRequestGeneration = g_loadRequestGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
 	char name[260] = {};
 	const bool readable = ReadLoadProbeName(stream, name);
+	ObserveLoadStreamSnapshot(stream);
 	const bool reject = g_rejectLoadBasename[0]
 		&& (!readable || _stricmp(name, g_rejectLoadBasename) == 0);
 	_MESSAGE("LOAD_REQUEST_PROBE save=%s readable=%u arg1=%08X arg2=%02X arg3=%02X arg4=%08X reject=%u",

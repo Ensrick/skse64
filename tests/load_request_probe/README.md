@@ -90,3 +90,33 @@ need further investigation. Other outstanding gates: Journal and quickload
 rejection, valid load/save/reload after rejection, sustained gameplay, actual
 plugin/currency admission policy and useful in-game refusal explanation.
 Default installed SKSE remains CC2F98A4; no campaign repair is claimed.
+
+## Read-only engine image observation (September10)
+
+`SKSE_AUTOMATION_LOAD_STREAM_PROBE=1`, in addition to the existing request
+probe opt-in, compares the actual buffered ESS against a read-sharing disk
+open. It neither advances the stream nor changes save bytes. The exact
+1.7.104 Win32FileType vtable is checked before reading fields: buffered bytes
+at+BD0, size+174, position+BE0 and decompression flag+BCA. Unknown layouts,
+already-decompressed buffers and sizes outside1..64MiB are only logged as
+uncovered; this diagnostic does NOT make an admission decision.
+
+Why this is not NiFile::file: the runtime's derived Win32FileType read method
+at159D800 copies from+BD0 and updates+BE0/+170. The base class's FILE pointer
+is not the source consumed here. Constructor159C730 reserves64MiB and installs
+vtable1B521A0. Exact executable MD5 remains113faeb71fd8f62b26d0c8627299ab40.
+
+Candidate40125953FE87C5E336C29CB148E21C71DAED4B44158F4BE0333F2759C7807EDB:
+all5,550,827 bytes of the rejected Adventurer3 test copy matched atposition0,
+decompressed0; Main recovered and native navigation/Quit passed (PID7180).
+An admitted Save7 matched4,606,518 bytes and loaded through Continue; the
+new Save8 matched4,601,612 bytes and loaded through Journal (PID32360).
+Both controlled private muted runs exited normally with controller0.
+The second run survived80s after the reload, including bounded engine input
+delivery. This does not prove movement distance, long gameplay, campaign
+recovery, a deployed policy, or save validity beyond the compared bytes.
+
+The Windows synthetic test compiles the actual observer and exercises exact
+multi-chunk comparison, mismatch, unreadable memory, size/layout/decompression
+refusal, competing writer, handle release and default-off inertness. Other
+platforms retain the portable request/recovery/installation regression tests.
