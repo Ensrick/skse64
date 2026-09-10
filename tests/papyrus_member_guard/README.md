@@ -1,7 +1,9 @@
-# Experimental Papyrus object-member bounds guard
+# Papyrus object-member bounds guard
 
-Default OFF. `SKSE_AUTOMATION_MEMBER_GUARD=1` installs paired source/destination
-resolver checks for the pinned1.7.104 executable (MD5
+Default ON after controlled opt-in reproduction tests. The SKSE.ini setting
+`[General] EnablePapyrusMemberBoundsCheck=0` disables it for diagnosis; no INI
+edit is required normally. It installs paired source/destination resolver
+checks for the pinned1.7.104 executable (MD5
 `113faeb71fd8f62b26d0c8627299ab40`). This addresses a reproduced out-of-bounds
 member access on an empty runtime placeholder for a removed script. It does
 not restore that script, clean a save, initialize currency accounting, or

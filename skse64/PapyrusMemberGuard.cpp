@@ -1,6 +1,7 @@
 #include "PapyrusMemberGuard.h"
 #include "skse64_common/Relocation.h"
 #include "skse64_common/BranchTrampoline.h"
+#include "skse64_common/Utilities.h"
 #include <Windows.h>
 #include <atomic>
 #include <cstring>
@@ -87,8 +88,12 @@ void* Forwarder(std::uintptr_t entry) {
 }
 
 void Install() {
-    char setting[2] = {};
-    if (GetEnvironmentVariableA("SKSE_AUTOMATION_MEMBER_GUARD", setting, sizeof(setting)) != 1 || setting[0] != '1') return;
+    UInt32 enabled = 1;
+    GetConfigOption_UInt32("General", "EnablePapyrusMemberBoundsCheck", &enabled);
+    if (!enabled) {
+        _MESSAGE("PAPYRUS_MEMBER_GUARD disabled_by_configuration=1");
+        return;
+    }
     const auto source = RelocationManager::s_baseAddr + 0x014D54C0;
     const auto destination = RelocationManager::s_baseAddr + 0x014D58F0;
     const unsigned char sourcePrefix[] = {0x40,0x55,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x8D,0xAC,0x24,0xB0,0xF8,0xFF,0xFF};
@@ -105,6 +110,6 @@ void Install() {
     const bool writeInstalled = g_branchTrampoline.Write5Branch(destination, reinterpret_cast<std::uintptr_t>(DestinationHook));
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(source), 6);
     FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(destination), 6);
-    _MESSAGE("PAPYRUS_MEMBER_GUARD installed_read=%u installed_write=%u runtime=1.7.104 experimental=1", unsigned(readInstalled), unsigned(writeInstalled));
+    _MESSAGE("PAPYRUS_MEMBER_GUARD installed_read=%u installed_write=%u runtime=1.7.104 default_enabled=1", unsigned(readInstalled), unsigned(writeInstalled));
 }
 }
