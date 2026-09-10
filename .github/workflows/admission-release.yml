@@ -1,0 +1,38 @@
+name: Pinned admission release candidate
+on:
+  push:
+    paths: ['skse64/**', 'tests/load_admission_lifecycle/**', '.github/workflows/admission-release.yml']
+  pull_request:
+    paths: ['skse64/**', 'tests/load_admission_lifecycle/**', '.github/workflows/admission-release.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: skse64
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ianpatt/common
+          ref: 64e233c096735551f6ac9a773726a8a3960e46cd
+          path: common
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Ensrick/skyrim-mod-assistant
+          ref: b2e0387db460fec3680827252e39060121a2acea
+          path: admission
+          sparse-checkout: |
+            mods/save-load-admission
+            mods/currency-integration/native/src
+          persist-credentials: false
+      - run: cmake -S common -B common/build -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/extern"
+      - run: cmake --build common/build --config Release --target install
+      - run: cmake -S skse64 -B skse64/build-admission-release -Dcommon_DIR="${{ github.workspace }}/extern/lib/cmake/common" -DENSRICK_SAVE_ADMISSION_SOURCE_DIR="${{ github.workspace }}/admission/mods/save-load-admission/native" -DENSRICK_SAVE_ADMISSION_RELEASE=ON
+      - run: cmake --build skse64/build-admission-release --config Release --target skse64
+      - run: cmake -S skse64/tests/load_admission_lifecycle -B lifecycle
+      - run: cmake --build lifecycle --config Release
+      - run: ctest --test-dir lifecycle -C Release --output-on-failure

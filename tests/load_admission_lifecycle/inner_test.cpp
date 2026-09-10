@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Actual inner hook and Prepare/Close functions; synthetic engine/reader state.
 #include <cstdint>
+#include <atomic>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -14,6 +15,7 @@ static bool enabled=true, nativeResult=true, allowAcquire=true;
 static unsigned nested=0;
 static std::string saveName;
 static bool consumed=false;
+static std::atomic<bool> g_loadRequestHooksInstalled{false};
 static UInt64* expectedStream;
 static std::uint64_t generation=42, finished=0;
 static void CheckAt(bool value, unsigned line) { ++checks; if(!value) throw std::runtime_error("inner assertion line "+std::to_string(line)); }
@@ -120,12 +122,17 @@ int main() {
         }
         injectedName="Outer.ess";consumed=false;finished=0;saveName="Preserved.ess";
         nativeCalls=preloads=postloads=closes=0;
+#ifdef ENSRICK_SAVE_ADMISSION_RELEASE
+        Check(manager.LoadGame_Hook(stream,0xABCDEF12,0x1234ABCD,&manager,0xA5));
+        Check(nativeCalls==1 && preloads==1 && postloads==1 && closes==1 && finished==42);
+#else
         Check(!manager.LoadGame_Hook(stream,1,2,nullptr,3));
         Check(!nativeCalls && !preloads && !postloads && !closes && finished==42);
         Check(saveName=="Preserved.ess" && !Serialization::s_admittedFilePrepared && !g_loadGameLock.depth);
         consumed=false;finished=0;
         Check(manager.LoadGame_Hook(stream,0xABCDEF12,0x1234ABCD,&manager,0xA5));
         Check(nativeCalls==1 && preloads==1 && postloads==1 && closes==1 && finished==42);
+#endif
         std::cout<<checks<<" actual inner-hook checks passed\n";
     } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

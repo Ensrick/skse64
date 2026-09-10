@@ -21,6 +21,7 @@ namespace {
 	// Diagnostic experiment only. Not installed unless explicitly opted in.
 	char g_rejectLoadBasename[260] = {};
 	bool g_recoverRejectedMainLoad = false;
+	std::atomic<bool> g_loadRequestHooksInstalled{false};
 	thread_local bool g_rejectedRequestNeedsRecovery = false;
 	thread_local LoadRefusal::Notice g_refusedLoadNotice;
 	std::atomic<UInt64> g_loadRequestGeneration{0};
@@ -306,6 +307,9 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	LoadAdmissionRuntime::InnerAdmission admittedInner;
 	if (LoadAdmissionRuntime::Enabled()) admittedInner = LoadAdmissionRuntime::AcquireInner(unk0);
+#ifdef ENSRICK_SAVE_ADMISSION_RELEASE
+	const bool injectInnerFalse = false;
+#else
 	// Private one-shot fault injection, only in the experimental adapter.
 	// Exercise our existing pre-target false path; NEVER falsify native success.
 	// The recursive load lock serializes consumption, including nested calls.
@@ -324,8 +328,9 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 		innerTestConsumed = true;
 		_MESSAGE("SAVE_ADMISSION_INNER_TEST simulated=1 once=1 before_reader_bind_preload_and_native_target=1");
 	}
+#endif
 	if (LoadAdmissionRuntime::Enabled() && (!admittedInner || injectInnerFalse || !Serialization::PrepareAdmittedLoad(admittedInner.snapshot))) {
-		_MESSAGE("SAVE_ADMISSION_INNER refused=1 before_preload_and_engine_target=1");
+		_MESSAGE("SAVE_ADMISSION_INNER refused=1 before_preload_and_engine_target=1 request_hooks_installed=%u",unsigned(g_loadRequestHooksInstalled.load()));
 		// A failed bind does not own the existing prepared reader. In particular,
 		// do not close another invocation's snapshot when preparation is busy.
 		LoadAdmissionRuntime::InnerReturned(admittedInner.token, false);
@@ -440,9 +445,18 @@ RelocAddr <uintptr_t> DeleteSaveGame_Enter2(0x00614690 + 0x17);
 
 void Hooks_SaveLoad_Commit(void)
 {
+#ifdef ENSRICK_SAVE_ADMISSION_RELEASE
+	const bool installRequestHooks = true;
+#else
 	char requestProbe[2] = {};
-	if (GetEnvironmentVariableA("SKSE_AUTOMATION_LOAD_REQUEST_PROBE", requestProbe, sizeof(requestProbe)) == 1
-		&& requestProbe[0] == '1') {
+	const bool installRequestHooks = GetEnvironmentVariableA("SKSE_AUTOMATION_LOAD_REQUEST_PROBE", requestProbe, sizeof(requestProbe)) == 1
+		&& requestProbe[0] == '1';
+#endif
+	if (installRequestHooks) {
+#ifdef ENSRICK_SAVE_ADMISSION_RELEASE
+		const bool valid = true;
+		g_recoverRejectedMainLoad = true;
+#else
 		const DWORD length = GetEnvironmentVariableA("SKSE_AUTOMATION_REJECT_LOAD", g_rejectLoadBasename, sizeof(g_rejectLoadBasename));
 		bool valid = length < sizeof(g_rejectLoadBasename);
 		for (DWORD i = 0; valid && i < length; ++i) {
@@ -450,23 +464,32 @@ void Hooks_SaveLoad_Commit(void)
 			valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 				|| c == '_' || c == '-' || c == '.';
 		}
+		char recover[2] = {};
+		g_recoverRejectedMainLoad = GetEnvironmentVariableA("SKSE_AUTOMATION_RECOVER_REJECTED_LOAD", recover, sizeof(recover)) == 1 && recover[0] == '1';
+#endif
 		RelocAddr<uintptr_t> requestCall(0x00625FF5);
 		RelocAddr<uintptr_t> failureCall(0x00625FFE);
 		const UInt8 expected[] = { 0xE8, 0xE6, 0x1D, 0x00, 0x00 };
 		const UInt8 failureExpected[] = { 0xE8, 0x1D, 0x1B, 0x00, 0x00 };
-		char recover[2] = {};
-		g_recoverRejectedMainLoad = GetEnvironmentVariableA("SKSE_AUTOMATION_RECOVER_REJECTED_LOAD", recover, sizeof(recover)) == 1 && recover[0] == '1';
 		if (valid && memcmp(reinterpret_cast<const void*>(requestCall.GetUIntPtr()), expected, sizeof(expected)) == 0
 			&& (!g_recoverRejectedMainLoad || memcmp(reinterpret_cast<const void*>(failureCall.GetUIntPtr()), failureExpected, sizeof(failureExpected)) == 0)) {
 			if (InstallLoadRequestProbe(requestCall, failureCall,
 				GetFnAddr(&BGSSaveLoadManager::LoadRequestProbe_Hook),
 				reinterpret_cast<uintptr_t>(&LoadRequestFailureRecovery_Hook), g_recoverRejectedMainLoad)) {
+				g_loadRequestHooksInstalled.store(true);
 				_MESSAGE("LOAD_REQUEST_PROBE_INSTALLED diagnostic_only=1 reject_basename=%s automatic_main_recovery=%u", g_rejectLoadBasename, unsigned(g_recoverRejectedMainLoad));
 			}
 		} else {
 			_MESSAGE("LOAD_REQUEST_PROBE_NOT_INSTALLED invalid_input_or_call_bytes=1");
 		}
 	}
+#ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
+	if (LoadAdmissionRuntime::Enabled()) {
+		_MESSAGE("SAVE_ADMISSION_REQUEST_HOOKS installed=%u recovery_required=1 inner_enforcement_remains_enabled=1",unsigned(g_loadRequestHooksInstalled.load()));
+		if(!g_loadRequestHooksInstalled.load())
+			_ERROR("SAVE_ADMISSION_REQUEST_HOOKS_MISSING fail_closed=1 inner_loads_refused=1 native_error_ui_only=1");
+	}
+#endif
 	// Load & Save
 	g_branchTrampoline.Write5Call(SaveGame_HookTarget_Enter, GetFnAddr(&BGSSaveLoadManager::SaveGame_Hook));
 	g_branchTrampoline.Write5Call(LoadGame_HookTarget_Enter, GetFnAddr(&BGSSaveLoadManager::LoadGame_Hook));

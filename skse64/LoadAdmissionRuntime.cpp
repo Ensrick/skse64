@@ -56,11 +56,17 @@ std::vector<ensrick_admission_plugin_name> Names(const std::vector<std::string>&
 }
 }
 bool Enabled() {
+#ifdef ENSRICK_SAVE_ADMISSION_RELEASE
+    // Explicit release superbuild only. No process environment can silently
+    // turn off the installed package's save-compatibility contract.
+    return true;
+#else
     static const bool enabled = [] {
         char value[2] = {};
         return GetEnvironmentVariableA("SKSE_AUTOMATION_ENFORCE_SAVE_ADMISSION", value, sizeof(value)) == 1 && value[0] == '1';
     }();
     return enabled;
+#endif
 }
 bool Begin(std::uint64_t** input, RequestToken& admitted, LoadRefusal::Notice& refused) {
     admitted = {};
