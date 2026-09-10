@@ -2,6 +2,8 @@ name: Diagnostic load-request probe regression
 on:
   push:
     paths:
+      - 'skse64/TextureReleaseFix.*'
+      - 'tests/texture_release/**'
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'
       - 'skse64/LoadPluginSnapshot.h'
@@ -19,6 +21,8 @@ on:
       - '.github/workflows/load-request-probe.yml'
   pull_request:
     paths:
+      - 'skse64/TextureReleaseFix.*'
+      - 'tests/texture_release/**'
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'
       - 'skse64/LoadPluginSnapshot.h'
@@ -64,3 +68,6 @@ jobs:
       - run: cmake -S tests/papyrus_member_guard -B build-member-guard
       - run: cmake --build build-member-guard --config Release
       - run: ctest --test-dir build-member-guard -C Release --output-on-failure
+      - run: cmake -S tests/texture_release -B build-texture-release
+      - run: cmake --build build-texture-release --config Release
+      - run: ctest --test-dir build-texture-release -C Release --output-on-failure

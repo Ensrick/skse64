@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(texture_release_tests LANGUAGES CXX)
+enable_testing()
+add_executable(texture_release_test test.cpp)
+target_compile_features(texture_release_test PRIVATE cxx_std_11)
+add_test(NAME texture_release_signature COMMAND texture_release_test)

@@ -23,6 +23,7 @@
 #include "Hooks_DirectInput8Create.h"
 #include "Hooks_Diagnostics.h"
 #include "InternalSerialization.h"
+#include "TextureReleaseFix.h"
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 #include "LoadStreamLifetime.h"
 #endif
@@ -203,6 +204,7 @@ void SKSE64_Initialize(void)
 	Hooks_Data_Commit();
 	Init_CoreSerialization_Callbacks();
 	Hooks_DirectInput_Commit();
+	TextureReleaseFix::Install();
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	// Optional observer spends trampoline capacity only after mandatory hooks.
 	LoadStreamLifetime::Install();
