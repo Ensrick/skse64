@@ -4,12 +4,16 @@ on:
     paths:
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'
+      - 'skse64/LoadPluginSnapshot.h'
+      - 'tests/plugin_snapshot/**'
       - 'tests/load_request_probe/**'
       - '.github/workflows/load-request-probe.yml'
   pull_request:
     paths:
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'
+      - 'skse64/LoadPluginSnapshot.h'
+      - 'tests/plugin_snapshot/**'
       - 'tests/load_request_probe/**'
       - '.github/workflows/load-request-probe.yml'
 permissions:
@@ -27,3 +31,6 @@ jobs:
       - run: cmake -S tests/load_request_probe -B build-load-request-probe
       - run: cmake --build build-load-request-probe --config Release
       - run: ctest --test-dir build-load-request-probe -C Release --output-on-failure
+      - run: cmake -S tests/plugin_snapshot -B build-plugin-snapshot
+      - run: cmake --build build-plugin-snapshot --config Release
+      - run: ctest --test-dir build-plugin-snapshot -C Release --output-on-failure

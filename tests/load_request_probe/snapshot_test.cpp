@@ -8,10 +8,18 @@
 #include <string>
 #include <iostream>
 #include <stdexcept>
+#include "LoadPluginSnapshot.h"
 using UInt8=std::uint8_t;
 using UInt32=std::uint32_t;
 using UInt64=std::uint64_t;
 struct RelocationManager { inline static std::uintptr_t s_baseAddr=0x140000000; };
+// Actual engine layout is asserted by the full plugin build. This synthetic
+// observer test deliberately supplies no loaded table and tests the independent
+// snapshot failure is contained without obstructing the image comparison.
+#define STATIC_ASSERT static_assert
+struct DataHandler { char padding[0xD60]; int modList; };
+struct ModInfo { char padding[0x438]; UInt32 fileFlags; char pad2[0x478-0x43C]; UInt8 modIndex; UInt8 pad3; std::uint16_t lightIndex; };
+struct HandlerPointer { DataHandler* value=nullptr; DataHandler** GetPtr(){return &value;} } g_dataHandler;
 std::string lastLog;
 template<typename... Args> void logMessage(const char* format, Args... args) {
     char buf[2048]; std::snprintf(buf,sizeof(buf),format,args...); lastLog=buf;

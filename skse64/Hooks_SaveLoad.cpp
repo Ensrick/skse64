@@ -9,6 +9,7 @@
 #include "PapyrusVM.h"
 #include "PluginManager.h"
 #include "Hooks_UI.h"
+#include "LoadPluginSnapshot.h"
 #include <atomic>
 #include <new>
 
@@ -142,6 +143,25 @@ namespace {
 			|| vtable != RelocationManager::s_baseAddr + 0x01B521A0) {
 			_MESSAGE("LOAD_STREAM_SNAPSHOT diagnostic_only=1 layout_match=0");
 			return;
+		}
+		// Snapshot actual loaded arrays, never a disk plugins.txt proxy. The
+		// observer is diagnostic-only; refusals here do not decide game loading.
+		STATIC_ASSERT(offsetof(DataHandler, modList) == LoadPluginSnapshot::kModListOffset);
+		STATIC_ASSERT(offsetof(ModInfo, fileFlags) == LoadPluginSnapshot::kFileFlagsOffset);
+		STATIC_ASSERT(offsetof(ModInfo, modIndex) == LoadPluginSnapshot::kModIndexOffset);
+		STATIC_ASSERT(offsetof(ModInfo, lightIndex) == LoadPluginSnapshot::kLightIndexOffset);
+		try {
+			DataHandler* handler = nullptr;
+			if (!read(g_dataHandler.GetPtr(), &handler, sizeof(handler))) throw LoadPluginSnapshot::SnapshotError("unreadable singleton");
+			auto reader = [&read](std::uintptr_t address, void* target, size_t length) { return read(reinterpret_cast<const void*>(address), target, length); };
+			const auto table = LoadPluginSnapshot::Read(reader, reinterpret_cast<std::uintptr_t>(handler));
+			_MESSAGE("LOAD_PLUGIN_SNAPSHOT diagnostic_only=1 ok=1 full=%u light=%u thread=%u", unsigned(table.full.size()), unsigned(table.light.size()), GetCurrentThreadId());
+			for (unsigned i=0; i<table.full.size(); ++i) _MESSAGE("LOAD_PLUGIN_FULL index=%u name=%s", i, table.full[i].c_str());
+			for (unsigned i=0; i<table.light.size(); ++i) _MESSAGE("LOAD_PLUGIN_LIGHT index=%u name=%s", i, table.light[i].c_str());
+		} catch (const std::exception& error) {
+			_MESSAGE("LOAD_PLUGIN_SNAPSHOT diagnostic_only=1 ok=0 reason=%s", error.what());
+		} catch (...) {
+			_MESSAGE("LOAD_PLUGIN_SNAPSHOT diagnostic_only=1 ok=0 reason=unknown_exception");
 		}
 		auto field = [stream](size_t offset) { return reinterpret_cast<const char*>(stream) + offset; };
 		if (!read(field(0xBD0), &memory, sizeof(memory)) || !read(field(0x174), &size, sizeof(size))
