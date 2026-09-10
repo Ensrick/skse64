@@ -30,5 +30,11 @@ int main() {
     Check(!ProbeSample(9) && !ProbeSample(15) && !ProbeSample(17));
     Check(ProbeSample(std::uint64_t(1) << 63));
     Check(!ProbeSample(~std::uint64_t(0)));
+    Check(Enabled(1, 0, 0));
+    Check(!Enabled(0, 0, 0));
+    Check(Enabled(0, 1, '1'));
+    Check(!Enabled(1, 1, '0'));
+    Check(!Enabled(1, 1, 'x'));
+    Check(!Enabled(1, 3, '1'));
     std::printf("%u texture release signature/branch checks passed\n", checks);
 }

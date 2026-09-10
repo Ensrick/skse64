@@ -6,8 +6,14 @@
 
 namespace TextureReleaseFix {
 void Install() {
-    char enabled[2] = {};
-    if (GetEnvironmentVariableA("SKSE_AUTOMATION_TEXTURE_RELEASE_FIX", enabled, sizeof(enabled)) != 1 || enabled[0] != '1') return;
+    UInt32 configured = 1;
+    GetConfigOption_UInt32("General", "EnableTextureDuplicateReleaseFix", &configured);
+    char overrideValue[2] = {};
+    const DWORD overrideLength = GetEnvironmentVariableA("SKSE_AUTOMATION_TEXTURE_RELEASE_FIX", overrideValue, sizeof(overrideValue));
+    if (!Enabled(configured, overrideLength, overrideValue[0])) {
+        _MESSAGE("TEXTURE_RELEASE_FIX installed=0 disabled_by_policy=1 configured=%u environment_length=%u", configured, overrideLength);
+        return;
+    }
     auto* function = reinterpret_cast<unsigned char*>(RelocationManager::s_baseAddr + FunctionRva);
     unsigned char before[sizeof(Original)] = {};
     SIZE_T count = 0;
@@ -33,7 +39,7 @@ void Install() {
     std::memcpy(before + PatchOffset, Patch, sizeof(Patch));
     const bool verified = ReadProcessMemory(GetCurrentProcess(), function, after, sizeof(after), &count) &&
         count == sizeof(after) && !std::memcmp(before, after, sizeof(after));
-    _MESSAGE("TEXTURE_RELEASE_FIX installed=%u protection_restored=%u instruction_cache_flushed=%u opt_in=1 rva=100F1DE bytes=EB2B90 scope=remove_duplicate_release_triplet",
-        unsigned(verified), unsigned(restored), unsigned(flushed));
+    _MESSAGE("TEXTURE_RELEASE_FIX installed=%u protection_restored=%u instruction_cache_flushed=%u default_enabled=1 environment_override=%u rva=100F1DE bytes=EB2B90 scope=remove_duplicate_release_triplet",
+        unsigned(verified), unsigned(restored), unsigned(flushed), unsigned(overrideLength != 0));
 }
 }

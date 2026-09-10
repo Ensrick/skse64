@@ -29,6 +29,10 @@ static_assert(PatchOffset + 2 + Patch[1] == 0x7B, "Jump to wrapper free setup");
 inline bool Matches(const unsigned char* bytes, std::size_t length) noexcept {
     return bytes && length == sizeof(Original) && !std::memcmp(bytes, Original, length);
 }
+// Environment is a diagnostic override; absent uses the normal INI policy.
+inline bool Enabled(std::uint32_t configured, std::uint32_t envLength, char envValue) noexcept {
+    return envLength ? (envLength == 1 && envValue == '1') : configured != 0;
+}
 void Install();
 // At most 68 sampled calls over uint64 range; two records per sample. Later
 // calls still increment the counter but do not read wrapper data or log.

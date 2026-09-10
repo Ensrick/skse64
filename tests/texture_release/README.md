@@ -1,9 +1,12 @@
-# Opt-in native renderer-texture release repair
+# Pinned native renderer-texture release repair
 
-Tracking: Ensrick/skyrim-mod-assistant#268, parent #262. Experimental; not
-automatically enabled in ordinary builds or a claim of whole-game stability.
+Tracking: Ensrick/skyrim-mod-assistant#268, parent #262. The narrow repair is
+default-enabled on the exact verified runtime; this is not a claim of whole-game
+stability. SKSE.ini `[General] EnableTextureDuplicateReleaseFix=0` disables it.
 
-`SKSE_AUTOMATION_TEXTURE_RELEASE_FIX=1` enables a three-byte startup patch,
+`SKSE_AUTOMATION_TEXTURE_RELEASE_FIX=0` or `1` overrides the INI for diagnostics.
+Unknown nonempty override values disable the patch and are logged. With no
+override, the INI policy (default1) controls the three-byte startup patch,
 only when all 147 bytes of the verified 1.7.104 function match. Any unknown or
 already-modified function is left untouched. Installation follows SKSE plugin
 Load/LoadComplete and mandatory hooks; do not call it later while engine
