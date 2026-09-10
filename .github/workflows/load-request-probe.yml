@@ -2,7 +2,7 @@ name: Diagnostic load-request probe regression
 on:
   push:
     paths:
-      - 'skse64/TextureReleaseFix.*'
+      - 'skse64/TextureRelease*'
       - 'tests/texture_release/**'
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'
@@ -21,7 +21,7 @@ on:
       - '.github/workflows/load-request-probe.yml'
   pull_request:
     paths:
-      - 'skse64/TextureReleaseFix.*'
+      - 'skse64/TextureRelease*'
       - 'tests/texture_release/**'
       - 'skse64/Hooks_SaveLoad.cpp'
       - 'skse64/GameData.h'

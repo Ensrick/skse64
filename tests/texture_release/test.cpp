@@ -25,5 +25,10 @@ int main() {
     Check(Patch[0] == 0xEB && Patch[2] == 0x90);
     Check(FunctionRva + PatchOffset + 2 + Patch[1] == 0x100F20B);
     Check(Original[0x7B] == 0xBA && Original[0x7C] == 0x28);
+    Check(!ProbeSample(0));
+    Check(ProbeSample(1) && ProbeSample(8) && ProbeSample(16));
+    Check(!ProbeSample(9) && !ProbeSample(15) && !ProbeSample(17));
+    Check(ProbeSample(std::uint64_t(1) << 63));
+    Check(!ProbeSample(~std::uint64_t(0)));
     std::printf("%u texture release signature/branch checks passed\n", checks);
 }

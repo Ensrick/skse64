@@ -30,4 +30,8 @@ inline bool Matches(const unsigned char* bytes, std::size_t length) noexcept {
     return bytes && length == sizeof(Original) && !std::memcmp(bytes, Original, length);
 }
 void Install();
+// At most 68 sampled calls over uint64 range; two records per sample. Later
+// calls still increment the counter but do not read wrapper data or log.
+inline bool ProbeSample(std::uint64_t n) noexcept { return n && (n <= 8 || !(n & (n-1))); }
+void InstallProbe();
 }

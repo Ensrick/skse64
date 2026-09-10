@@ -39,3 +39,20 @@ check new crash logs, and restore the previous DLL afterward. Passing the
 signature test alone does not validate D3D lifetime or accept this fix for
 normal deployment. Unreviewed creation paths could still require ownership
 audit; repeated reload memory observations are not a full GPU leak test.
+
+## Optional cleanup execution observation
+
+`SKSE_AUTOMATION_TEXTURE_RELEASE_PROBE=1` observes only the face-updater call
+at43CB54, through a checked five-byte call replacement and14-byte absolute
+relay. It requires the full cleanup signature (original or our patched form)
+and original call bytes, checks trampoline capacity/range, memory protection,
+cache flush and call readback. It can be used with the repair on or off.
+
+The observer counts calls and logs the first8 and subsequent powers of2,
+before and after forwarding the native operation **exactly once**. Wrapper
+bytes are read before the native call only; nothing is read after possible
+free. Diagnostic failures are contained and LastError preserved, but native
+failures remain outside every catch. There are no COM method queries or
+AddRef/Release count probes. A before-call wrapper-count observation is not
+an atomic ownership proof; the returned marker proves this invocation returned,
+not that every other cleanup caller or all renderer lifetimes are verified.

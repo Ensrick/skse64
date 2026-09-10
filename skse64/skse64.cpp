@@ -205,6 +205,7 @@ void SKSE64_Initialize(void)
 	Init_CoreSerialization_Callbacks();
 	Hooks_DirectInput_Commit();
 	TextureReleaseFix::Install();
+	TextureReleaseFix::InstallProbe();
 #ifdef ENSRICK_EXPERIMENTAL_SAVE_ADMISSION
 	// Optional observer spends trampoline capacity only after mandatory hooks.
 	LoadStreamLifetime::Install();
