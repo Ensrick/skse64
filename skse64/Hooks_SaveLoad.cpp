@@ -31,7 +31,7 @@ void BGSSaveLoadManager::SaveGame_Hook(UInt64 *unk0)
 #endif
 }
 
-bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, void *unk3)
+bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, void *unk3, UInt8 unk4)
 {
 	const char *saveName = reinterpret_cast<const char *>(unk0[0xBB0 / 8]); 
 
@@ -47,7 +47,19 @@ bool BGSSaveLoadManager::LoadGame_Hook(UInt64 *unk0, UInt32 unk1, UInt32 unk2, v
 
 	Serialization::SetSaveName(saveName);
 	PluginManager::Dispatch_Message(0, SKSEMessagingInterface::kMessage_PreLoadGame, (void*)saveName, strlen(saveName), NULL);
-	bool result = CALL_MEMBER_FN(this, LoadGame_HookTarget)(unk0, unk1, unk2, unk3);
+	// 1.7.104 passes a sixth ABI argument (including this), a byte in the
+	// caller's [rsp+28h]. The target reads it at entry-rsp+30h and uses it
+	// during validation. Preserve it unchanged; do not invent its semantics.
+	// Omitting it forwards an unrelated byte from this hook's stack instead.
+	char loadArgumentProbe[2] = {};
+	const bool traceLoadArguments = GetEnvironmentVariableA(
+		"SKSE_AUTOMATION_LOAD_ARGUMENT_PROBE", loadArgumentProbe, sizeof(loadArgumentProbe)) == 1
+		&& loadArgumentProbe[0] == '1';
+	if (traceLoadArguments)
+		_MESSAGE("LOAD_ARGUMENT_FORWARD save=%s arg1=%08X arg2=%08X sixth=%02X", saveName, unk1, unk2, unsigned(unk4));
+	bool result = CALL_MEMBER_FN(this, LoadGame_HookTarget)(unk0, unk1, unk2, unk3, unk4);
+	if (traceLoadArguments)
+		_MESSAGE("LOAD_ARGUMENT_RESULT save=%s result=%u", saveName, unsigned(result));
 	PluginManager::Dispatch_Message(0, SKSEMessagingInterface::kMessage_PostLoadGame, (void*)result, 1, NULL);
 	Serialization::SetSaveName(NULL);
 
